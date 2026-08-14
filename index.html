@@ -314,6 +314,29 @@ function AddVendorModal({ categories, onClose, onSave }) {
   );
 }
 
+function EditTaxiModal({ taxi, onClose, onSave }) {
+  const [plate, setPlate] = useState(taxi.plate || "");
+  const [label, setLabel] = useState(taxi.label || "");
+  const [notes, setNotes] = useState(taxi.notes || "");
+  const [status, setStatus] = useState(taxi.status || "Active");
+  const save = () => {
+    if (!plate && !label) return;
+    onSave({ ...taxi, plate, label: label || plate, notes, status });
+    onClose();
+  };
+  return e(Modal, {title:"Taksiyi Düzenle", onClose},
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Plaka"), e("input",{style:S.input, value:plate, onChange:ev=>setPlate(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Etiket / İsim"), e("input",{style:S.input, value:label, onChange:ev=>setLabel(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Durum"),
+      e("select",{style:S.input, value:status, onChange:ev=>setStatus(ev.target.value)},
+        e("option",{value:"Active"},"Aktif"), e("option",{value:"Inactive"},"Pasif")
+      )
+    ),
+    e("div", {style:{marginBottom:16}}, e("label",{style:S.label},"Notlar"), e("textarea",{style:{...S.input,minHeight:60}, value:notes, onChange:ev=>setNotes(ev.target.value)})),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Kaydet")
+  );
+}
+
 // ══════════════════════════════════════════════════════════════
 // STAT ROW
 // ══════════════════════════════════════════════════════════════
@@ -332,12 +355,26 @@ function StatRow({ stats }) {
 function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openDriver }) {
   const [showAddTaxi, setShowAddTaxi] = useState(false);
   const [showAddDriverFor, setShowAddDriverFor] = useState(null);
+  const [editingTaxi, setEditingTaxi] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set(taxis.map(t=>t.id)));
 
   const toggle = (id) => setExpanded(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
 
   const saveTaxi = async (t) => {
     try { await api(pin, "addTaxi", {taxi:t}); showToast("Taksi eklendi"); onReload(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const updateTaxiFn = async (t) => {
+    try { await api(pin, "updateTaxi", {taxi:t}); showToast("Taksi güncellendi"); onReload(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const deleteTaxiFn = async (t) => {
+    const driverCount = drivers.filter(d=>d.taxiId===t.id).length;
+    const msg = driverCount > 0
+      ? t.label + " silinsin mi? Bu taksiye bağlı " + driverCount + " şoför var — kayıtları kalır ama taksiye atanmamış görünür."
+      : t.label + " silinsin mi?";
+    if (!confirm(msg)) return;
+    try { await api(pin, "deleteTaxi", {taxiId:t.id}); showToast("Taksi silindi"); onReload(); }
     catch(ex){ showToast("Hata: "+ex.message,"err"); }
   };
   const saveDriver = async (d) => {
@@ -357,12 +394,17 @@ function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openD
       const agg = aggregateShifts(taxiShifts);
       const isOpen = expanded.has(taxi.id);
       return e("div", {key:taxi.id, style:{...S.card, borderColor: CONFIG.accentColor+"55"}},
-        e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",cursor:"pointer"}, onClick:()=>toggle(taxi.id)},
-          e("div", null,
-            e("div", {style:{fontSize:17,fontWeight:800,color:"#f5f5f0"}}, "🚕 " + taxi.label),
+        e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+          e("div", {style:{cursor:"pointer",flex:1}, onClick:()=>toggle(taxi.id)},
+            e("div", {style:{fontSize:17,fontWeight:800,color:"#f5f5f0"}}, "🚕 " + taxi.label + (taxi.status==="Inactive"?"  ":"")),
             taxi.plate && e("div", {style:{fontSize:12,color:"#9a9a90",marginTop:2}}, taxi.plate),
+            taxi.status==="Inactive" && e("span",{style:{fontSize:10,color:"#ef4444",border:"1px solid #ef4444",borderRadius:6,padding:"1px 6px",marginTop:4,display:"inline-block"}}, "Pasif")
           ),
-          e("div", {style:{fontSize:12,color:"#8a8a80"}}, taxiDrivers.length + " şoför " + (isOpen?"▲":"▼"))
+          e("div", {style:{display:"flex",alignItems:"center",gap:10}},
+            e("span", {style:{fontSize:11,color:CONFIG.accentColor,cursor:"pointer"}, onClick:()=>setEditingTaxi(taxi)}, "Düzenle"),
+            e("span", {style:{fontSize:11,color:"#ef4444",cursor:"pointer"}, onClick:()=>deleteTaxiFn(taxi)}, "Sil"),
+            e("div", {style:{fontSize:12,color:"#8a8a80",cursor:"pointer"}, onClick:()=>toggle(taxi.id)}, taxiDrivers.length + " şoför " + (isOpen?"▲":"▼"))
+          )
         ),
         e(StatRow, {stats:[
           {val: fmtTL(agg.earnings), lbl:"Toplam Kazanç"},
@@ -393,7 +435,8 @@ function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openD
       );
     }),
     showAddTaxi && e(AddTaxiModal, {onClose:()=>setShowAddTaxi(false), onSave:saveTaxi}),
-    showAddDriverFor && e(AddDriverModal, {taxiId:showAddDriverFor, onClose:()=>setShowAddDriverFor(null), onSave:saveDriver})
+    showAddDriverFor && e(AddDriverModal, {taxiId:showAddDriverFor, onClose:()=>setShowAddDriverFor(null), onSave:saveDriver}),
+    editingTaxi && e(EditTaxiModal, {taxi:editingTaxi, onClose:()=>setEditingTaxi(null), onSave:updateTaxiFn})
   );
 }
 
