@@ -407,7 +407,6 @@ function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openD
           {val: fmtTL(agg.earnings), lbl:"Toplam Kazanç"},
           {val: fmtKm(agg.km), lbl:"Toplam Km"},
           {val: agg.perKm.toFixed(2)+" ₺/km", lbl:"Km Başı Kazanç", color:CONFIG.accentColor},
-          {val: agg.kmPerLiter?agg.kmPerLiter.toFixed(1)+" km/L":"—", lbl:"Yakıt Verimi"},
         ]}),
         isOpen && e("div", {style:{marginTop:14}},
           taxiDrivers.length===0 && e("div", {style:{fontSize:13,color:"#8a8a80",marginBottom:10}}, "Bu taksiye henüz şoför atanmadı."),
@@ -500,7 +499,6 @@ function DriverDetailView({ pin, driver, taxi, shifts, onBack, onReload, showToa
         {val: fmtTL(agg.net), lbl:"Net (Kazanç-Yakıt)", color:CONFIG.accentColor},
         {val: fmtKm(agg.km), lbl:"Toplam Km"},
         {val: agg.perKm.toFixed(2)+" ₺/km", lbl:"Km Başı Kazanç", color:CONFIG.accentColor},
-        {val: agg.kmPerLiter?agg.kmPerLiter.toFixed(1)+" km/L":"—", lbl:"Yakıt Verimi (km/L)"},
       ]}),
       !editing
         ? e("button", {style:{...S.btn("ghost"), marginTop:12}, onClick:()=>setEditing(true)}, "Düzenle")
@@ -540,8 +538,7 @@ function DriverDetailView({ pin, driver, taxi, shifts, onBack, onReload, showToa
           e("div", {style:{fontSize:12,color:"#c8c8c0"}}, fmtKm(s.km)),
           e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(s.earnings) + (sh.rides && sh.rides.length ? " ("+sh.rides.length+" sefer)" : "")),
           e("div", {style:{fontSize:12,color:"#c8c8c0"}}, "Yakıt: " + fmtTL(s.fuelCost) + (s.liters?" ("+s.liters+" L)":"")),
-          e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km"),
-          s.kmPerLiter>0 && e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.kmPerLiter.toFixed(1)+" km/L")
+          e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km")
         ),
         sh.rides && sh.rides.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:6}}, "Seferler: " + sh.rides.map(r=>fmtTL(r.amount)+" ("+r.time+")").join(" · ")),
         sh.notes && e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:6,fontStyle:"italic"}}, sh.notes)
@@ -682,7 +679,6 @@ function DriverDashboard({ pin, driver, taxi, shifts, onReload, showToast }) {
 
   const activeShift = shifts.find(sh => sh.status === "open");
   const closedShifts = shifts.filter(sh => sh.status !== "open");
-  const agg = aggregateShifts(shifts); // includes the running total of any open shift too
   const sorted = [...closedShifts].sort((a,b)=> (b.date||"").localeCompare(a.date||""));
 
   const startShift = async ({ kmStart }) => {
@@ -711,15 +707,6 @@ function DriverDashboard({ pin, driver, taxi, shifts, onReload, showToast }) {
   return e("div", null,
     e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0",marginBottom:4}}, "Merhaba, " + driver.firstName),
     taxi && e("div", {style:{fontSize:13,color:"#8a8a80",marginBottom:16}}, "🚕 " + taxi.label + (taxi.plate?" · "+taxi.plate:"")),
-
-    e("div", {style:S.card},
-      e(StatRow, {stats:[
-        {val: fmtTL(agg.earnings), lbl:"Toplam Kazanç"},
-        {val: fmtKm(agg.km), lbl:"Toplam Km"},
-        {val: agg.perKm.toFixed(2)+" ₺/km", lbl:"Km Başı Kazanç", color:CONFIG.accentColor},
-        {val: agg.kmPerLiter?agg.kmPerLiter.toFixed(1)+" km/L":"—", lbl:"Yakıt Verimi"},
-      ]})
-    ),
 
     !activeShift && e("button", {style:{...S.btn(), width:"100%", fontSize:16, padding:"14px 16px", marginBottom:16}, onClick:()=>setShowStart(true)}, "▶ Vardiya Başlat"),
 
