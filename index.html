@@ -224,17 +224,27 @@ function AddShiftModal({ onClose, onSave, taxiLabel }) {
   const [timeEnd, setTimeEnd] = useState("");
   const [kmStart, setKmStart] = useState("");
   const [kmEnd, setKmEnd] = useState("");
-  const [earnings, setEarnings] = useState("");
+  const [rides, setRides] = useState([]);
+  const [rideInput, setRideInput] = useState("");
   const [fuelCost, setFuelCost] = useState("");
   const [fuelLiters, setFuelLiters] = useState("");
   const [notes, setNotes] = useState("");
 
   const km = Math.max(0, (Number(kmEnd)||0) - (Number(kmStart)||0));
+  const earningsTotal = rides.reduce((s,r)=>s+r, 0);
+
+  const addRide = () => {
+    const v = Number(rideInput);
+    if (!v || v <= 0) return;
+    setRides([...rides, v]);
+    setRideInput("");
+  };
+  const removeRide = (idx) => setRides(rides.filter((_,i)=>i!==idx));
 
   const save = () => {
     if (!kmStart || !kmEnd) return;
     onSave({ id: genId("sh"), date, timeStart, timeEnd, kmStart:Number(kmStart), kmEnd:Number(kmEnd),
-      earnings:Number(earnings)||0, fuelCost:Number(fuelCost)||0, fuelLiters:Number(fuelLiters)||0, notes });
+      earnings: earningsTotal, rides, fuelCost:Number(fuelCost)||0, fuelLiters:Number(fuelLiters)||0, notes });
     onClose();
   };
 
@@ -251,7 +261,23 @@ function AddShiftModal({ onClose, onSave, taxiLabel }) {
       e("div",{style:{flex:1}}, e("label",{style:S.label},"Km Bitiş"), e("input",{style:S.input, type:"number", inputMode:"decimal", value:kmEnd, onChange:ev=>setKmEnd(ev.target.value)})),
     ),
     km > 0 && e("div", {style:{fontSize:12, color:CONFIG.accentColor, marginBottom:12, fontWeight:700}}, "Toplam: " + fmtKm(km)),
-    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Kazanç (₺)"), e("input",{style:S.input, type:"number", inputMode:"decimal", value:earnings, onChange:ev=>setEarnings(ev.target.value), placeholder:"0.00"})),
+
+    e("div", {style:{marginBottom:14, borderTop:"1px solid #262626", paddingTop:12}},
+      e("label",{style:S.label},"Seferler (Her sefer sonrası tutarı ekleyin)"),
+      e("div", {style:{display:"flex",gap:8,marginTop:4}},
+        e("input",{style:{...S.input,flex:1}, type:"number", inputMode:"decimal", placeholder:"Sefer tutarı (₺)", value:rideInput,
+          onChange:ev=>setRideInput(ev.target.value), onKeyDown:ev=>{ if(ev.key==="Enter"){ev.preventDefault();addRide();} }}),
+        e("button", {style:{...S.btn(), padding:"10px 16px"}, onClick:addRide}, "+ Ekle")
+      ),
+      rides.length > 0 && e("div", {style:{marginTop:10, display:"flex", flexWrap:"wrap", gap:6}},
+        rides.map((r,idx) => e("div", {key:idx, style:{background:"#0f0f0f",border:"1px solid #262626",borderRadius:8,padding:"4px 10px",fontSize:12,color:"#c8c8c0",display:"flex",alignItems:"center",gap:6}},
+          fmtTL(r),
+          e("span", {style:{cursor:"pointer",color:"#ef4444",fontWeight:700}, onClick:()=>removeRide(idx)}, "✕")
+        ))
+      ),
+      e("div", {style:{marginTop:10, fontSize:14, fontWeight:800, color:CONFIG.accentColor}}, rides.length + " sefer · Toplam: " + fmtTL(earningsTotal))
+    ),
+
     e("div", {style:{display:"flex",gap:10,marginBottom:12}},
       e("div",{style:{flex:1}}, e("label",{style:S.label},"Yakıt Maliyeti (₺)"), e("input",{style:S.input, type:"number", inputMode:"decimal", value:fuelCost, onChange:ev=>setFuelCost(ev.target.value), placeholder:"0.00"})),
       e("div",{style:{flex:1}}, e("label",{style:S.label},"Yakıt (Litre)"), e("input",{style:S.input, type:"number", inputMode:"decimal", value:fuelLiters, onChange:ev=>setFuelLiters(ev.target.value), placeholder:"0.0"})),
@@ -528,11 +554,12 @@ function DriverDetailView({ pin, driver, taxi, shifts, onBack, onReload, showToa
         ),
         e("div", {style:{display:"flex",gap:14,flexWrap:"wrap",marginTop:6}},
           e("div", {style:{fontSize:12,color:"#c8c8c0"}}, fmtKm(s.km)),
-          e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(s.earnings)),
+          e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(s.earnings) + (sh.rides && sh.rides.length ? " ("+sh.rides.length+" sefer)" : "")),
           e("div", {style:{fontSize:12,color:"#c8c8c0"}}, "Yakıt: " + fmtTL(s.fuelCost) + (s.liters?" ("+s.liters+" L)":"")),
           e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km"),
           s.kmPerLiter>0 && e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.kmPerLiter.toFixed(1)+" km/L")
         ),
+        sh.rides && sh.rides.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:6}}, "Seferler: " + sh.rides.map(r=>fmtTL(r)).join(" · ")),
         sh.notes && e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:6,fontStyle:"italic"}}, sh.notes)
       );
     })
@@ -715,10 +742,11 @@ function DriverDashboard({ pin, driver, taxi, shifts, onReload, showToast }) {
         ),
         e("div", {style:{display:"flex",gap:14,flexWrap:"wrap",marginTop:6}},
           e("div", {style:{fontSize:12,color:"#c8c8c0"}}, fmtKm(s.km)),
-          e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(s.earnings)),
+          e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(s.earnings) + (sh.rides && sh.rides.length ? " ("+sh.rides.length+" sefer)" : "")),
           e("div", {style:{fontSize:12,color:"#c8c8c0"}}, "Yakıt: " + fmtTL(s.fuelCost) + (s.liters?" ("+s.liters+" L)":"")),
           e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km")
-        )
+        ),
+        sh.rides && sh.rides.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:6}}, "Seferler: " + sh.rides.map(r=>fmtTL(r)).join(" · "))
       );
     }),
     showAdd && e(AddShiftModal, {taxiLabel: taxi&&taxi.label, onClose:()=>setShowAdd(false), onSave:saveShift})
