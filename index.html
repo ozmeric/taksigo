@@ -79,7 +79,38 @@ function todayStr() { return new Date().toISOString().slice(0,10); }
 function nowTime() { const d=new Date(); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
 function fmtTL(n) { return "₺" + (Number(n)||0).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtKm(n) { return (Number(n)||0).toLocaleString("tr-TR",{maximumFractionDigits:1}) + " km"; }
-function fmtDate(s) { if(!s) return ""; const d=new Date(s); if(isNaN(d)) return s; return d.toLocaleDateString("tr-TR",{day:"2-digit",month:"short",year:"numeric"}); }
+function fmtDate(s) { if(!s) return ""; const d=new Date(s); if(isNaN(d)) return s; return d.toLocaleDateString("tr-TR",{day:"2-digit",month:"short",year:"numeric",timeZone:"Europe/Istanbul"}); }
+
+// ── Date filtering (Bugün / Bu Hafta / Bu Ay / Tümü + custom range) ──
+function istanbulTodayStr() { return new Date().toLocaleDateString("en-CA", {timeZone:"Europe/Istanbul"}); }
+function shiftDateStr(baseStr, deltaDays) {
+  const [y,m,d] = baseStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m-1, d));
+  dt.setUTCDate(dt.getUTCDate() + deltaDays);
+  return dt.toISOString().slice(0,10);
+}
+function filterByDate(shifts, from, to) {
+  return shifts.filter(sh => (!from || sh.date >= from) && (!to || sh.date <= to));
+}
+function DateFilterBar({ from, to, onChange }) {
+  const setPreset = (preset) => {
+    const today = istanbulTodayStr();
+    if (preset === "today") onChange(today, today);
+    else if (preset === "week") onChange(shiftDateStr(today, -6), today);
+    else if (preset === "month") { const [y,m] = today.split("-"); onChange(y+"-"+m+"-01", today); }
+    else onChange("", "");
+  };
+  const btnStyle = {...S.btn("ghost"), fontSize:11, padding:"5px 10px"};
+  return e("div", {style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:14}},
+    e("button",{style:btnStyle, onClick:()=>setPreset("today")}, "Bugün"),
+    e("button",{style:btnStyle, onClick:()=>setPreset("week")}, "Bu Hafta"),
+    e("button",{style:btnStyle, onClick:()=>setPreset("month")}, "Bu Ay"),
+    e("button",{style:btnStyle, onClick:()=>setPreset("all")}, "Tümü"),
+    e("input",{style:{...S.input, width:128, fontSize:12, padding:"5px 8px"}, type:"date", value:from, onChange:ev=>onChange(ev.target.value, to)}),
+    e("span",{style:{color:"#666",fontSize:12}},"—"),
+    e("input",{style:{...S.input, width:128, fontSize:12, padding:"5px 8px"}, type:"date", value:to, onChange:ev=>onChange(from, ev.target.value)})
+  );
+}
 
 async function api(pin, action, extra={}) {
   const res = await fetch(API_URL, { method:"POST", body: JSON.stringify({pin, action, ...extra}) });
@@ -161,7 +192,7 @@ function LoginView({ onLogin }) {
       e("div", {style:{width:"100%", maxWidth:220}},
         e("input", {
           style:{...S.input, fontSize:16, textAlign:"center", letterSpacing:5, padding:"9px 10px"},
-          type:"tel", inputMode:"numeric", maxLength:6, placeholder:"••••",
+          type:"password", inputMode:"numeric", maxLength:6, placeholder:"••••",
           value:pin, onChange:ev=>setPin(ev.target.value.replace(/\D/g,"")),
           onKeyDown:ev=>{ if(ev.key==="Enter") submit(); }, autoFocus:true
         }),
@@ -180,7 +211,7 @@ function LoginView({ onLogin }) {
     e("div", {style:{width:"100%", maxWidth:320}},
       e("input", {
         style:{...S.input, fontSize:32, textAlign:"center", letterSpacing:10, padding:"20px 14px"},
-        type:"tel", inputMode:"numeric", maxLength:6, placeholder:"••••",
+        type:"password", inputMode:"numeric", maxLength:6, placeholder:"••••",
         value:pin, onChange:ev=>setPin(ev.target.value.replace(/\D/g,"")),
         onKeyDown:ev=>{ if(ev.key==="Enter") submit(); }, autoFocus:true
       }),
@@ -385,6 +416,37 @@ function StatRow({ stats }) {
   );
 }
 
+// Collapsed shift-history row: date + total earnings, expands on tap for full detail
+function ShiftHistoryRow({ sh, driver }) {
+  const [open, setOpen] = useState(false);
+  const s = shiftStats(sh);
+  const payout = driver ? computePayout(driver, s.earnings) : null;
+  return e("div", {style:{...S.card, padding:0, marginBottom:8, overflow:"hidden"}},
+    e("div", {style:{padding:12, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"}, onClick:()=>setOpen(!open)},
+      e("div", null,
+        e("div",{style:{fontWeight:700,fontSize:13,color:"#f5f5f0"}}, fmtDate(sh.date)),
+        e("div",{style:{fontSize:11,color:"#8a8a80"}}, (sh.timeStart||"") + (sh.timeEnd?" – "+sh.timeEnd:""))
+      ),
+      e("div", {style:{display:"flex",alignItems:"center",gap:10}},
+        e("div",{style:{fontSize:15,fontWeight:800,color:CONFIG.accentColor}}, fmtTL(s.earnings)),
+        e("div",{style:{fontSize:11,color:"#666"}}, open?"▲":"▼")
+      )
+    ),
+    open && e("div", {style:{padding:"0 12px 12px", borderTop:"1px solid #262626"}},
+      e("div", {style:{display:"flex",gap:14,flexWrap:"wrap",marginTop:10}},
+        e("div", {style:{fontSize:12,color:"#c8c8c0"}}, fmtKm(s.km)),
+        (sh.rides && sh.rides.length) ? e("div", {style:{fontSize:12,color:"#8a8a80"}}, sh.rides.length+" sefer") : null,
+        e("div", {style:{fontSize:12,color:"#c8c8c0"}}, "Yakıt: " + fmtTL(s.fuelCost) + (s.liters?" ("+s.liters+" L)":"")),
+        e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km")
+      ),
+      payout !== null && e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700,marginTop:8}}, "Şoför Payı: " + fmtTL(payout)),
+      sh.rides && sh.rides.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:8}}, "Seferler: " + sh.rides.map(r=>fmtTL(r.amount)+" ("+r.time+")").join(" · ")),
+      sh.fuel && sh.fuel.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:4}}, "Yakıt: " + sh.fuel.map(f=>fmtTL(f.amount)+" @ "+fmtKm(f.km)).join(" · ")),
+      sh.notes && e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:8,fontStyle:"italic"}}, sh.notes)
+    )
+  );
+}
+
 // ══════════════════════════════════════════════════════════════
 // ADMIN: HOME (Taxi cards → Driver cards)
 // ══════════════════════════════════════════════════════════════
@@ -393,8 +455,12 @@ function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openD
   const [showAddDriverFor, setShowAddDriverFor] = useState(null);
   const [editingTaxi, setEditingTaxi] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set(taxis.map(t=>t.id)));
+  const [fuelOpenFor, setFuelOpenFor] = useState(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const toggle = (id) => setExpanded(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+  const filteredShifts = filterByDate(shifts, dateFrom, dateTo);
 
   const saveTaxi = async (t) => {
     try { await api(pin, "addTaxi", {taxi:t}); showToast("Taksi eklendi"); onReload(); }
@@ -423,12 +489,16 @@ function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openD
       e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0"}}, "Taksiler"),
       e("button", {style:S.btn(), onClick:()=>setShowAddTaxi(true)}, "+ Taksi Ekle")
     ),
+    e(DateFilterBar, {from:dateFrom, to:dateTo, onChange:(f,t)=>{setDateFrom(f);setDateTo(t);}}),
     taxis.length===0 && e("div", {style:{...S.card, textAlign:"center", color:"#8a8a80"}}, "Henüz taksi eklenmedi. Başlamak için “+ Taksi Ekle” butonuna dokunun."),
     taxis.map(taxi => {
       const taxiDrivers = drivers.filter(d => d.taxiId === taxi.id);
-      const taxiShifts = shifts.filter(sh => taxiDrivers.some(d=>d.id===sh.driverId));
+      const taxiShifts = filteredShifts.filter(sh => taxiDrivers.some(d=>d.id===sh.driverId));
       const agg = aggregateShifts(taxiShifts);
+      const taxiFuel = taxiShifts.flatMap(sh => (sh.fuel||[]).map(f => ({...f, date:sh.date, driverName:(drivers.find(d=>d.id===sh.driverId)||{}).firstName||"?"})))
+        .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (b.time||"").localeCompare(a.time||""));
       const isOpen = expanded.has(taxi.id);
+      const fuelOpen = fuelOpenFor === taxi.id;
       return e("div", {key:taxi.id, style:{...S.card, borderColor: CONFIG.accentColor+"55"}},
         e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
           e("div", {style:{cursor:"pointer",flex:1}, onClick:()=>toggle(taxi.id)},
@@ -446,13 +516,26 @@ function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openD
           {val: fmtTL(agg.earnings), lbl:"Toplam Kazanç"},
           {val: fmtKm(agg.km), lbl:"Toplam Km"},
           {val: agg.perKm.toFixed(2)+" ₺/km", lbl:"Km Başı Kazanç", color:CONFIG.accentColor},
+          {val: fmtTL(agg.fuelCost) + " (" + taxiFuel.length + ")", lbl:"Yakıt Alımı"},
         ]}),
+        taxiFuel.length > 0 && e("div", {style:{marginTop:8}},
+          e("span", {style:{fontSize:11,color:CONFIG.accentColor,cursor:"pointer"}, onClick:()=>setFuelOpenFor(fuelOpen?null:taxi.id)}, (fuelOpen?"▲ ":"▼ ") + "Yakıt Geçmişi"),
+          fuelOpen && e("div", {style:{marginTop:8, display:"flex", flexDirection:"column", gap:6}},
+            taxiFuel.map((f,idx) => e("div", {key:idx, style:{display:"flex",justifyContent:"space-between",background:"#0f0f0f",border:"1px solid #262626",borderRadius:8,padding:"7px 10px"}},
+              e("div", null,
+                e("div", {style:{fontSize:12,color:"#f5f5f0",fontWeight:700}}, fmtTL(f.amount) + (f.liters?" ("+f.liters+" L)":"")),
+                e("div", {style:{fontSize:11,color:"#8a8a80"}}, fmtDate(f.date) + " · " + f.time + " · " + f.driverName)
+              ),
+              e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtKm(f.km))
+            ))
+          )
+        ),
         isOpen && e("div", {style:{marginTop:14}},
           taxiDrivers.length===0 && e("div", {style:{fontSize:13,color:"#8a8a80",marginBottom:10}}, "Bu taksiye henüz şoför atanmadı."),
           taxiDrivers.map(dr => {
-            const drShifts = shifts.filter(sh => sh.driverId === dr.id);
+            const drShifts = filteredShifts.filter(sh => sh.driverId === dr.id);
             const a = aggregateShifts(drShifts);
-            const isActive = drShifts.some(sh => sh.status === "open");
+            const isActive = shifts.some(sh => sh.driverId === dr.id && sh.status === "open");
             return e("div", {key:dr.id, style:{background:"#0f0f0f",border:"1px solid "+(isActive?CONFIG.accentColor:"#262626"),borderRadius:10,padding:12,marginBottom:8,cursor:"pointer"}, onClick:()=>openDriver(dr.id)},
               e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
                 e("div", {style:{fontWeight:700,color:"#f5f5f0",fontSize:14,display:"flex",alignItems:"center",gap:6}},
@@ -492,12 +575,15 @@ function DriverDetailView({ pin, driver, taxi, shifts, onBack, onReload, onReloa
   const [salaryValue, setSalaryValue] = useState(driver.salaryValue !== undefined ? String(driver.salaryValue) : "50");
   const [showEndActive, setShowEndActive] = useState(false);
   const [resettingPin, setResettingPin] = useState(false);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const activeShift = shifts.find(sh => sh.status === "open");
-  const closedShifts = shifts.filter(sh => sh.status !== "open");
-  const agg = aggregateShifts(shifts); // includes running total of any open shift
+  const filteredShifts = filterByDate(shifts, dateFrom, dateTo);
+  const closedShifts = filteredShifts.filter(sh => sh.status !== "open");
+  const agg = aggregateShifts(filteredShifts); // includes running total of any open shift within range
   const sorted = [...closedShifts].sort((a,b)=> (b.date||"").localeCompare(a.date||""));
-  const allFuel = shifts.flatMap(sh => (sh.fuel||[]).map(f => ({...f, date:sh.date})))
+  const allFuel = filteredShifts.flatMap(sh => (sh.fuel||[]).map(f => ({...f, date:sh.date})))
     .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (b.time||"").localeCompare(a.time||""));
 
   const saveNote = async () => {
@@ -627,27 +713,9 @@ function DriverDetailView({ pin, driver, taxi, shifts, onBack, onReload, onReloa
     ),
 
     e("div", {style:{fontSize:14,fontWeight:800,color:"#f5f5f0",margin:"16px 0 8px"}}, "Vardiya Geçmişi"),
+    e(DateFilterBar, {from:dateFrom, to:dateTo, onChange:(f,t)=>{setDateFrom(f);setDateTo(t);}}),
     sorted.length===0 && e("div", {style:{color:"#8a8a80",fontSize:13}}, "Henüz vardiya kaydı yok."),
-    sorted.map(sh => {
-      const s = shiftStats(sh);
-      const payout = computePayout(driver, s.earnings);
-      return e("div", {key:sh.id, style:{...S.card, padding:12, marginBottom:8}},
-        e("div", {style:{display:"flex",justifyContent:"space-between"}},
-          e("div", {style:{fontWeight:700,fontSize:13,color:"#f5f5f0"}}, fmtDate(sh.date)),
-          e("div", {style:{fontSize:12,color:"#8a8a80"}}, (sh.timeStart||"") + (sh.timeEnd?" – "+sh.timeEnd:""))
-        ),
-        e("div", {style:{display:"flex",gap:14,flexWrap:"wrap",marginTop:6}},
-          e("div", {style:{fontSize:12,color:"#c8c8c0"}}, fmtKm(s.km)),
-          e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(s.earnings) + (sh.rides && sh.rides.length ? " ("+sh.rides.length+" sefer)" : "")),
-          e("div", {style:{fontSize:12,color:"#c8c8c0"}}, "Yakıt: " + fmtTL(s.fuelCost) + (s.liters?" ("+s.liters+" L)":"")),
-          e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km")
-        ),
-        e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700,marginTop:6}}, "Şoför Payı: " + fmtTL(payout)),
-        sh.rides && sh.rides.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:6}}, "Seferler: " + sh.rides.map(r=>fmtTL(r.amount)+" ("+r.time+")").join(" · ")),
-        sh.fuel && sh.fuel.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:4}}, "Yakıt: " + sh.fuel.map(f=>fmtTL(f.amount)+" @ "+fmtKm(f.km)).join(" · ")),
-        sh.notes && e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:6,fontStyle:"italic"}}, sh.notes)
-      );
-    }),
+    sorted.map(sh => e(ShiftHistoryRow, {key:sh.id, sh, driver})),
     showEndActive && activeShift && e(EndShiftModal, {kmStart: activeShift.kmStart, onClose:()=>setShowEndActive(false), onSave:forceEndShift})
   );
 }
@@ -889,25 +957,7 @@ function DriverDashboard({ pin, driver, taxi, shifts, onReload, onReloadShifts, 
 
     e("div", {style:{fontSize:14,fontWeight:800,color:"#f5f5f0",margin:"16px 0 8px"}}, "Vardiya Geçmişim"),
     sorted.length===0 && e("div", {style:{color:"#8a8a80",fontSize:13}}, "Henüz tamamlanmış vardiya yok."),
-    sorted.map(sh => {
-      const s = shiftStats(sh);
-      const payout = computePayout(driver, s.earnings);
-      return e("div", {key:sh.id, style:{...S.card, padding:12, marginBottom:8}},
-        e("div", {style:{display:"flex",justifyContent:"space-between"}},
-          e("div", {style:{fontWeight:700,fontSize:13,color:"#f5f5f0"}}, fmtDate(sh.date)),
-          e("div", {style:{fontSize:12,color:"#8a8a80"}}, (sh.timeStart||"") + (sh.timeEnd?" – "+sh.timeEnd:""))
-        ),
-        e("div", {style:{display:"flex",gap:14,flexWrap:"wrap",marginTop:6}},
-          e("div", {style:{fontSize:12,color:"#c8c8c0"}}, fmtKm(s.km)),
-          e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(s.earnings) + (sh.rides && sh.rides.length ? " ("+sh.rides.length+" sefer)" : "")),
-          e("div", {style:{fontSize:12,color:"#c8c8c0"}}, "Yakıt: " + fmtTL(s.fuelCost) + (s.liters?" ("+s.liters+" L)":"")),
-          e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km")
-        ),
-        e("div", {style:{fontSize:13,color:CONFIG.accentColor,fontWeight:800,marginTop:6}}, "Payınız: " + fmtTL(payout)),
-        sh.rides && sh.rides.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:6}}, "Seferler: " + sh.rides.map(r=>fmtTL(r.amount)+" ("+r.time+")").join(" · ")),
-        sh.fuel && sh.fuel.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:4}}, "Yakıt: " + sh.fuel.map(f=>fmtTL(f.amount)+" @ "+fmtKm(f.km)).join(" · "))
-      );
-    }),
+    sorted.map(sh => e(ShiftHistoryRow, {key:sh.id, sh, driver})),
     showStart && e(StartShiftModal, {taxiLabel: taxi&&taxi.label, onClose:()=>setShowStart(false), onSave:startShift}),
     showEnd && activeShift && e(EndShiftModal, {kmStart: activeShift.kmStart, onClose:()=>setShowEnd(false), onSave:endShift})
   );
