@@ -1074,17 +1074,13 @@ function App() {
 
   const loadAll = async (p) => {
     try {
-      const who = await api(p, "whoAmI");
-      setRole(who.role);
-      setMe(who.role === "driver" ? who.driver : null);
-      setAdminEmail(who.role === "admin" ? (who.email||"") : "");
-
-      const [tRes, dRes, sRes] = await Promise.all([
-        api(p,"getTaxis"), api(p,"getDrivers"), api(p,"getShifts",{})
-      ]);
-      setTaxis(tRes.taxis||[]);
-      setDrivers(dRes.drivers||[]);
-      setShifts(sRes.shifts||[]);
+      const boot = await api(p, "bootstrap");
+      setRole(boot.role);
+      setMe(boot.role === "driver" ? boot.driver : null);
+      setAdminEmail(boot.role === "admin" ? (boot.email||"") : "");
+      setTaxis(boot.taxis||[]);
+      setDrivers(boot.drivers||[]);
+      setShifts(boot.shifts||[]);
       setLoadedOnce(true);
     } catch (ex) {
       // Stored PIN is no longer valid (e.g. reset) — drop back to login

@@ -33,8 +33,9 @@
 <body>
 <div id="root"></div>
 <!-- Per-customer config — the only file that should ever differ between deployments -->
-<script src="./config.js"></script>
-<!-- Shared app code — identical for every customer. See APP-OVERVIEW.md. -->
-<script src="./app.js"></script>
+<script src="./config.js?v=1"></script>
+<!-- Shared app code — identical for every customer. See APP-OVERVIEW.md.
+     Bump ?v= here whenever app.js changes so it's re-fetched, not stuck in cache. -->
+<script src="./app.js?v=1"></script>
 </body>
 </html>
