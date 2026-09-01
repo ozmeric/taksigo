@@ -45,11 +45,9 @@ const S = {
 };
 
 function genId(prefix) { return prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
-function todayStr() { return new Date().toISOString().slice(0,10); }
-function nowTime() { const d=new Date(); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+function fmtDate(s) { if(!s) return ""; const d=new Date(s); if(isNaN(d)) return s; return d.toLocaleDateString("tr-TR",{day:"2-digit",month:"short",year:"numeric",timeZone:"Europe/Istanbul"}); }
 function fmtTL(n) { return "₺" + (Number(n)||0).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtKm(n) { return (Number(n)||0).toLocaleString("tr-TR",{maximumFractionDigits:1}) + " km"; }
-function fmtDate(s) { if(!s) return ""; const d=new Date(s); if(isNaN(d)) return s; return d.toLocaleDateString("tr-TR",{day:"2-digit",month:"short",year:"numeric",timeZone:"Europe/Istanbul"}); }
 
 // ── Date filtering (Bugün / Bu Hafta / Bu Ay / Tümü + custom range) ──
 function istanbulTodayStr() { return new Date().toLocaleDateString("en-CA", {timeZone:"Europe/Istanbul"}); }
@@ -255,7 +253,7 @@ function AddDriverModal({ taxiId, onClose, onSave }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
-  const [startDate, setStartDate] = useState(todayStr());
+  const [startDate, setStartDate] = useState(istanbulTodayStr());
   const [pinCode, setPinCode] = useState(String(Math.floor(1000+Math.random()*9000)));
   const [salaryType, setSalaryType] = useState("percentage");
   const [salaryValue, setSalaryValue] = useState("50");
@@ -325,7 +323,7 @@ function EndShiftModal({ onClose, onSave, kmStart }) {
 
 function AddExpenseModal({ taxis, defaultTaxiId, onClose, onSave }) {
   const [taxiId, setTaxiId] = useState(defaultTaxiId || (taxis[0] && taxis[0].id) || "");
-  const [date, setDate] = useState(todayStr());
+  const [date, setDate] = useState(istanbulTodayStr());
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState(CONFIG.expenseCategories[0]);
   const [vendor, setVendor] = useState("");
