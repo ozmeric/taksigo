@@ -840,6 +840,41 @@ function VendorsView({ pin, showToast }) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// ADMIN: SETTINGS (change admin PIN)
+// ══════════════════════════════════════════════════════════════
+function SettingsView({ pin, onPinChanged, showToast }) {
+  const [currentPin, setCurrentPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!currentPin || !newPin) return;
+    if (newPin.length < 4) { showToast("Yeni PIN en az 4 haneli olmalı", "err"); return; }
+    if (newPin !== confirmPin) { showToast("Yeni PIN'ler eşleşmiyor", "err"); return; }
+    setBusy(true);
+    try {
+      await api(pin, "updateAdminPin", {currentPin, newPin});
+      showToast("Yönetici PIN'i güncellendi");
+      setCurrentPin(""); setNewPin(""); setConfirmPin("");
+      onPinChanged(newPin); // keep the session alive under the new PIN
+    } catch(ex) { showToast("Hata: "+ex.message, "err"); }
+    setBusy(false);
+  };
+
+  return e("div", null,
+    e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0",marginBottom:16}}, "Ayarlar"),
+    e("div", {style:S.card},
+      e("div", {style:S.label}, "Yönetici PIN'ini Değiştir"),
+      e("div", {style:{marginTop:10,marginBottom:10}}, e("label",{style:S.label},"Mevcut PIN"), e("input",{style:S.input, type:"password", inputMode:"numeric", value:currentPin, onChange:ev=>setCurrentPin(ev.target.value.replace(/\D/g,""))})),
+      e("div", {style:{marginBottom:10}}, e("label",{style:S.label},"Yeni PIN"), e("input",{style:S.input, type:"password", inputMode:"numeric", value:newPin, onChange:ev=>setNewPin(ev.target.value.replace(/\D/g,""))})),
+      e("div", {style:{marginBottom:16}}, e("label",{style:S.label},"Yeni PIN (Tekrar)"), e("input",{style:S.input, type:"password", inputMode:"numeric", value:confirmPin, onChange:ev=>setConfirmPin(ev.target.value.replace(/\D/g,""))})),
+      e("button", {style:{...S.btn(), width:"100%", opacity:busy?0.6:1}, disabled:busy, onClick:submit}, busy?"Kaydediliyor...":"PIN'i Güncelle")
+    )
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
 // DRIVER DASHBOARD (kendi hesabı)
 // ══════════════════════════════════════════════════════════════
 function DriverDashboard({ pin, driver, taxi, shifts, onReload, onReloadShifts, showToast }) {
@@ -980,7 +1015,7 @@ function Header({ onLogout, isAdmin }) {
 }
 
 function Sidebar({ view, setView }) {
-  const items = [ ["home","🚕","Taksiler"], ["expenses","💳","Giderler"], ["vendors","🔧","Tedarikçiler"] ];
+  const items = [ ["home","🚕","Taksiler"], ["expenses","💳","Giderler"], ["vendors","🔧","Tedarikçiler"], ["settings","⚙️","Ayarlar"] ];
   return e("div", {className:"desktop-sidebar", style:{...S.sidebar, display:"flex", flexDirection:"column", justifyContent:"space-between"}},
     e("div", null,
       e("div", {style:S.sideLabel}, "Yönetim"),
@@ -991,7 +1026,7 @@ function Sidebar({ view, setView }) {
 }
 
 function BottomNav({ view, setView }) {
-  const items = [ ["home","🚕","Taksiler"], ["expenses","💳","Giderler"], ["vendors","🔧","Tedarikçi"] ];
+  const items = [ ["home","🚕","Taksiler"], ["expenses","💳","Giderler"], ["vendors","🔧","Tedarikçi"], ["settings","⚙️","Ayarlar"] ];
   return e("div", {className:"bottom-nav", style:{position:"fixed",bottom:0,left:0,right:0,background:"#141414",borderTop:"1px solid #2a2a2a",zIndex:100}},
     items.map(([id,icon,label]) => e("div", {key:id, onClick:()=>setView(id),
       style:{flex:1,textAlign:"center",padding:"10px 0",cursor:"pointer",color: view===id?CONFIG.accentColor:"#8a8a80"}},
@@ -1054,6 +1089,7 @@ function App() {
   useEffect(() => { if (pin) loadAll(pin); }, [pin]);
 
   const handleLogin = (p) => { try { localStorage.setItem("taksigo_pin", p); } catch(e) {} setAuthFailed(false); setPin(p); };
+  const handlePinChanged = (newPin) => { try { localStorage.setItem("taksigo_pin", newPin); } catch(e) {} setPin(newPin); };
   const handleLogout = () => { try { localStorage.removeItem("taksigo_pin"); } catch(e) {} setPin(null); setRole(null); setMe(null); setView("home"); setActiveDriverId(null); setLoadedOnce(false); };
   const reload = () => loadAll(pin);
 
@@ -1088,6 +1124,7 @@ function App() {
           : view === "home" ? e(AdminHomeView, {pin, taxis, drivers, shifts, onReload:reload, showToast, openDriver:setActiveDriverId})
           : view === "expenses" ? e(ExpensesView, {pin, taxis, showToast})
           : view === "vendors" ? e(VendorsView, {pin, showToast})
+          : view === "settings" ? e(SettingsView, {pin, onPinChanged:handlePinChanged, showToast})
           : null
       )
     ),
