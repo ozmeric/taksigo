@@ -171,6 +171,10 @@ function LoginView({ onLogin }) {
   const [pin, setPin] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
 
   const submit = async () => {
     if (!pin) return;
@@ -184,12 +188,23 @@ function LoginView({ onLogin }) {
     setBusy(false);
   };
 
+  const submitForgot = async () => {
+    if (!forgotEmail) return;
+    setForgotBusy(true);
+    try {
+      await api("", "forgotAdminPin", {email:forgotEmail});
+      setForgotSent(true);
+    } catch (ex) { /* stay silent either way — same UX whether email matched or not */ setForgotSent(true); }
+    setForgotBusy(false);
+  };
+
   if (mode === "admin") {
     return e("div", {style:{...S.root, alignItems:"center", justifyContent:"center", padding:24}},
       e("div", {style:{fontSize:32, marginBottom:6}}, CONFIG.logoText),
       e("div", {style:{fontSize:16, fontWeight:800, color:"#f5f5f0", marginBottom:2}}, "Yönetici Girişi"),
       e("div", {style:{fontSize:12, color:"#8a8a80", marginBottom:18}}, CONFIG.companyName),
-      e("div", {style:{width:"100%", maxWidth:220}},
+
+      !showForgot ? e("div", {style:{width:"100%", maxWidth:220}},
         e("input", {
           style:{...S.input, fontSize:16, textAlign:"center", letterSpacing:5, padding:"9px 10px"},
           type:"password", inputMode:"numeric", maxLength:6, placeholder:"••••",
@@ -197,9 +212,20 @@ function LoginView({ onLogin }) {
           onKeyDown:ev=>{ if(ev.key==="Enter") submit(); }, autoFocus:true
         }),
         err && e("div", {style:{color:"#ef4444", fontSize:12, marginTop:8, textAlign:"center"}}, err),
-        e("button", {style:{...S.btn("ghost"), width:"100%", marginTop:10, fontSize:13, padding:"8px 12px", opacity:busy?0.6:1}, disabled:busy, onClick:submit}, busy?"...":"Giriş Yap")
+        e("button", {style:{...S.btn("ghost"), width:"100%", marginTop:10, fontSize:13, padding:"8px 12px", opacity:busy?0.6:1}, disabled:busy, onClick:submit}, busy?"...":"Giriş Yap"),
+        e("div", {style:{fontSize:11, color:"#666", marginTop:14, cursor:"pointer", textAlign:"center"}, onClick:()=>{setShowForgot(true); setForgotSent(false);}}, "PIN'imi unuttum")
+      ) : e("div", {style:{width:"100%", maxWidth:240}},
+        !forgotSent ? [
+          e("div", {key:"lbl", style:{fontSize:12, color:"#9a9a90", marginBottom:8, textAlign:"center"}}, "Kayıtlı e-postanızı girin, size yeni bir PIN gönderelim."),
+          e("input", {key:"inp", style:{...S.input, fontSize:14, textAlign:"center", padding:"9px 10px"},
+            type:"email", placeholder:"eposta@ornek.com", value:forgotEmail, onChange:ev=>setForgotEmail(ev.target.value), autoFocus:true
+          }),
+          e("button", {key:"btn", style:{...S.btn(), width:"100%", marginTop:10, fontSize:13, padding:"8px 12px", opacity:forgotBusy?0.6:1}, disabled:forgotBusy, onClick:submitForgot}, forgotBusy?"Gönderiliyor...":"Sıfırlama Gönder")
+        ] : e("div", {style:{fontSize:12, color:CONFIG.accentColor, textAlign:"center", padding:"10px 0"}}, "Bu e-posta kayıtlıysa, yeni PIN gönderildi. Gelen kutunuzu kontrol edin."),
+        e("div", {style:{fontSize:11, color:"#666", marginTop:14, cursor:"pointer", textAlign:"center"}, onClick:()=>{setShowForgot(false); setForgotSent(false); setForgotEmail("");}}, "← Girişe dön")
       ),
-      e("div", {style:{fontSize:12, color:"#666", marginTop:20, cursor:"pointer"}, onClick:()=>{setMode("driver"); setErr(""); setPin("");}}, "← Şoför girişine dön"),
+
+      e("div", {style:{fontSize:12, color:"#666", marginTop:20, cursor:"pointer"}, onClick:()=>{setMode("driver"); setErr(""); setPin(""); setShowForgot(false);}}, "← Şoför girişine dön"),
       e("div", {style:{position:"fixed", bottom:20, fontSize:11, color:"#555"}}, "Powered by BuildFlow — Weblina LLC")
     );
   }
@@ -842,11 +868,13 @@ function VendorsView({ pin, showToast }) {
 // ══════════════════════════════════════════════════════════════
 // ADMIN: SETTINGS (change admin PIN)
 // ══════════════════════════════════════════════════════════════
-function SettingsView({ pin, onPinChanged, showToast }) {
+function SettingsView({ pin, adminEmail, onPinChanged, onEmailChanged, showToast }) {
   const [currentPin, setCurrentPin] = useState("");
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState(adminEmail || "");
+  const [emailBusy, setEmailBusy] = useState(false);
 
   const submit = async () => {
     if (!currentPin || !newPin) return;
@@ -862,8 +890,25 @@ function SettingsView({ pin, onPinChanged, showToast }) {
     setBusy(false);
   };
 
+  const submitEmail = async () => {
+    if (!email) return;
+    setEmailBusy(true);
+    try {
+      await api(pin, "setAdminEmail", {email});
+      showToast("E-posta kaydedildi");
+      onEmailChanged(email);
+    } catch(ex) { showToast("Hata: "+ex.message, "err"); }
+    setEmailBusy(false);
+  };
+
   return e("div", null,
     e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0",marginBottom:16}}, "Ayarlar"),
+    e("div", {style:S.card},
+      e("div", {style:S.label}, "Yönetici E-postası"),
+      e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:4,marginBottom:10}}, "PIN'inizi unutursanız, yeni bir PIN buraya gönderilir."),
+      e("input",{style:S.input, type:"email", placeholder:"eposta@ornek.com", value:email, onChange:ev=>setEmail(ev.target.value)}),
+      e("button", {style:{...S.btn("ghost"), width:"100%", marginTop:10, opacity:emailBusy?0.6:1}, disabled:emailBusy, onClick:submitEmail}, emailBusy?"Kaydediliyor...":"E-postayı Kaydet")
+    ),
     e("div", {style:S.card},
       e("div", {style:S.label}, "Yönetici PIN'ini Değiştir"),
       e("div", {style:{marginTop:10,marginBottom:10}}, e("label",{style:S.label},"Mevcut PIN"), e("input",{style:S.input, type:"password", inputMode:"numeric", value:currentPin, onChange:ev=>setCurrentPin(ev.target.value.replace(/\D/g,""))})),
@@ -1046,6 +1091,7 @@ function Toast({ toast }) {
 function App() {
   const [pin, setPin] = useState(() => { try { return localStorage.getItem("taksigo_pin") || null; } catch(e) { return null; } });
   const [role, setRole] = useState(null); // "admin" | "driver"
+  const [adminEmail, setAdminEmail] = useState("");
   const [me, setMe] = useState(null);     // driver record if role=driver
   const [taxis, setTaxis] = useState([]);
   const [drivers, setDrivers] = useState([]);
@@ -1061,6 +1107,7 @@ function App() {
       const who = await api(p, "whoAmI");
       setRole(who.role);
       setMe(who.role === "driver" ? who.driver : null);
+      setAdminEmail(who.role === "admin" ? (who.email||"") : "");
 
       const [tRes, dRes, sRes] = await Promise.all([
         api(p,"getTaxis"), api(p,"getDrivers"), api(p,"getShifts",{})
@@ -1124,7 +1171,7 @@ function App() {
           : view === "home" ? e(AdminHomeView, {pin, taxis, drivers, shifts, onReload:reload, showToast, openDriver:setActiveDriverId})
           : view === "expenses" ? e(ExpensesView, {pin, taxis, showToast})
           : view === "vendors" ? e(VendorsView, {pin, showToast})
-          : view === "settings" ? e(SettingsView, {pin, onPinChanged:handlePinChanged, showToast})
+          : view === "settings" ? e(SettingsView, {pin, adminEmail, onPinChanged:handlePinChanged, onEmailChanged:setAdminEmail, showToast})
           : null
       )
     ),
