@@ -1,0 +1,1153 @@
+// ── Shared TaksiGo app code ──
+// Runs identically for every customer. The only thing that differs per
+// customer is window.TAKSIGO_CONFIG, set by that customer's tiny config.js
+// (loaded before this file in index.html). Editing THIS file and re-hosting
+// it once updates every customer at once — no per-customer repo pushes.
+const CUSTOMER_CONFIG = window.TAKSIGO_CONFIG || {};
+
+const CONFIG = {
+  companyName:  "TaksiGo",
+  companyShort: "TaksiGo",
+  primaryColor: "#0a0a0a",
+  accentColor:  "#F5C518",
+  logoText:     "🚕",
+
+  expenseCategories: ["Bakım-Onarım","Sigorta","Muayene","Lastik","Yıkama-Temizlik","Trafik Cezası","Ruhsat/Vergi","Yedek Parça","Diğer"],
+  vendorCategories:  ["Tamirci","Sigorta Acentesi","Yedek Parça","Çekici","Lastikçi","Diğer"],
+
+  notifyEmail: "",
+};
+
+const API_URL = CUSTOMER_CONFIG.apiUrl || "https://your-worker.workers.dev/";
+
+const { useState, useEffect, useRef, useMemo } = React;
+const e = React.createElement;
+
+// ── Style helpers (siyah / sarı — black / taxi yellow) ──
+const S = {
+  root: {display:"flex",flexDirection:"column",height:"100vh",background:"#0a0a0a",color:"#e8e8e0",fontFamily:"'Inter',system-ui,sans-serif",overflow:"hidden"},
+  header: {background:"#141414",borderBottom:"2px solid "+CONFIG.accentColor,padding:"0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0},
+  sidebar: {width:210,background:"#141414",borderRight:"1px solid #2a2a2a",overflowY:"auto",flexShrink:0,padding:"8px 0"},
+  content: {flex:1,overflowY:"auto",padding:16},
+  card: {background:"#161616",border:"1px solid #2a2a2a",borderRadius:12,padding:16,marginBottom:12},
+  input: {width:"100%",background:"#000",border:"1px solid #2a2a2a",borderRadius:8,padding:"10px 12px",color:"#f5f5f0",fontSize:14,fontFamily:"inherit",outline:"none"},
+  label: {display:"block",fontSize:11,fontWeight:700,color:"#9a9a90",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6},
+  btn: (variant) => variant === "ghost"
+    ? {background:"transparent",border:"1px solid #2a2a2a",color:"#c8c8c0",borderRadius:8,padding:"10px 16px",cursor:"pointer",fontSize:14,fontWeight:600,fontFamily:"inherit"}
+    : variant === "danger"
+    ? {background:"#ef4444",color:"#fff",border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}
+    : {background:CONFIG.accentColor,color:"#0a0a0a",border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer",fontSize:14,fontWeight:800,fontFamily:"inherit"},
+  sideLabel: {fontSize:10,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.12em",padding:"8px 16px 4px"},
+  sideItem: (active) => ({padding:"10px 16px",cursor:"pointer",fontSize:13,fontWeight:active?700:400,color:active?CONFIG.accentColor:"#a8a8a0",background:active?"#1e1e1e":"transparent",borderLeft:active?"2px solid "+CONFIG.accentColor:"2px solid transparent",display:"flex",alignItems:"center",gap:8,userSelect:"none"}),
+  statBox: {background:"#0f0f0f",border:"1px solid #262626",borderRadius:10,padding:"10px 12px",flex:1,minWidth:100},
+  statVal: {fontSize:18,fontWeight:800,color:"#f5f5f0"},
+  statLbl: {fontSize:10,color:"#8a8a80",textTransform:"uppercase",letterSpacing:"0.05em",marginTop:2},
+};
+
+function genId(prefix) { return prefix + "-" + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function todayStr() { return new Date().toISOString().slice(0,10); }
+function nowTime() { const d=new Date(); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+function fmtTL(n) { return "₺" + (Number(n)||0).toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtKm(n) { return (Number(n)||0).toLocaleString("tr-TR",{maximumFractionDigits:1}) + " km"; }
+function fmtDate(s) { if(!s) return ""; const d=new Date(s); if(isNaN(d)) return s; return d.toLocaleDateString("tr-TR",{day:"2-digit",month:"short",year:"numeric",timeZone:"Europe/Istanbul"}); }
+
+// ── Date filtering (Bugün / Bu Hafta / Bu Ay / Tümü + custom range) ──
+function istanbulTodayStr() { return new Date().toLocaleDateString("en-CA", {timeZone:"Europe/Istanbul"}); }
+function shiftDateStr(baseStr, deltaDays) {
+  const [y,m,d] = baseStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m-1, d));
+  dt.setUTCDate(dt.getUTCDate() + deltaDays);
+  return dt.toISOString().slice(0,10);
+}
+function filterByDate(shifts, from, to) {
+  return shifts.filter(sh => (!from || sh.date >= from) && (!to || sh.date <= to));
+}
+function DateFilterBar({ from, to, onChange }) {
+  const setPreset = (preset) => {
+    const today = istanbulTodayStr();
+    if (preset === "today") onChange(today, today);
+    else if (preset === "week") onChange(shiftDateStr(today, -6), today);
+    else if (preset === "month") { const [y,m] = today.split("-"); onChange(y+"-"+m+"-01", today); }
+    else onChange("", "");
+  };
+  const btnStyle = {...S.btn("ghost"), fontSize:11, padding:"5px 10px"};
+  return e("div", {style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:14}},
+    e("button",{style:btnStyle, onClick:()=>setPreset("today")}, "Bugün"),
+    e("button",{style:btnStyle, onClick:()=>setPreset("week")}, "Bu Hafta"),
+    e("button",{style:btnStyle, onClick:()=>setPreset("month")}, "Bu Ay"),
+    e("button",{style:btnStyle, onClick:()=>setPreset("all")}, "Tümü"),
+    e("input",{style:{...S.input, width:128, fontSize:12, padding:"5px 8px"}, type:"date", value:from, onChange:ev=>onChange(ev.target.value, to)}),
+    e("span",{style:{color:"#666",fontSize:12}},"—"),
+    e("input",{style:{...S.input, width:128, fontSize:12, padding:"5px 8px"}, type:"date", value:to, onChange:ev=>onChange(from, ev.target.value)})
+  );
+}
+
+async function api(pin, action, extra={}) {
+  const res = await fetch(API_URL, { method:"POST", body: JSON.stringify({pin, action, ...extra}) });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+// ── Shift math ──
+function shiftStats(sh) {
+  const km = Math.max(0, (Number(sh.kmEnd)||0) - (Number(sh.kmStart)||0));
+  const earnings = Number(sh.earnings)||0;
+  const fuelCost = Number(sh.fuelCost)||0;
+  const liters = Number(sh.fuelLiters)||0;
+  return {
+    km,
+    earnings,
+    fuelCost,
+    liters,
+    net: earnings - fuelCost,
+    perKm: km > 0 ? earnings / km : 0,
+    kmPerLiter: liters > 0 ? km / liters : 0,
+    tlPerLiter: liters > 0 ? fuelCost / liters : 0,
+  };
+}
+
+function aggregateShifts(shifts) {
+  let km=0, earnings=0, fuelCost=0, liters=0;
+  shifts.forEach(sh => { const s = shiftStats(sh); km+=s.km; earnings+=s.earnings; fuelCost+=s.fuelCost; liters+=s.liters; });
+  return {
+    count: shifts.length, km, earnings, fuelCost, liters, net: earnings - fuelCost,
+    perKm: km > 0 ? earnings / km : 0,
+    kmPerLiter: liters > 0 ? km / liters : 0,
+  };
+}
+
+// Driver's take-home for a given vardiya's earnings, based on their pay setup:
+// a flat fee per vardiya, or a percentage of that vardiya's ride earnings.
+function computePayout(driver, earnings) {
+  if (!driver) return 0;
+  if (driver.salaryType === "flat") return Number(driver.salaryValue) || 0;
+  const pct = Number(driver.salaryValue) || 0;
+  return (Number(earnings) || 0) * (pct / 100);
+}
+
+// ── Toast ──
+function useToast() {
+  const [toast, setToast] = useState(null);
+  const show = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null), 2600); };
+  return [toast, show];
+}
+
+// ══════════════════════════════════════════════════════════════
+// LOGIN
+// ══════════════════════════════════════════════════════════════
+function LoginView({ onLogin }) {
+  const [mode, setMode] = useState("driver"); // "driver" (big, default) or "admin" (compact)
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+
+  const submit = async () => {
+    if (!pin) return;
+    setBusy(true); setErr("");
+    try {
+      await api(pin, "whoAmI"); // throws if PIN invalid
+      onLogin(pin);
+    } catch (ex) {
+      setErr("Hatalı PIN. Tekrar deneyin.");
+    }
+    setBusy(false);
+  };
+
+  const submitForgot = async () => {
+    if (!forgotEmail) return;
+    setForgotBusy(true);
+    try {
+      await api("", "forgotAdminPin", {email:forgotEmail});
+      setForgotSent(true);
+    } catch (ex) { /* stay silent either way — same UX whether email matched or not */ setForgotSent(true); }
+    setForgotBusy(false);
+  };
+
+  if (mode === "admin") {
+    return e("div", {style:{...S.root, alignItems:"center", justifyContent:"center", padding:24}},
+      e("div", {style:{fontSize:32, marginBottom:6}}, CONFIG.logoText),
+      e("div", {style:{fontSize:16, fontWeight:800, color:"#f5f5f0", marginBottom:2}}, "Yönetici Girişi"),
+      e("div", {style:{fontSize:12, color:"#8a8a80", marginBottom:18}}, CONFIG.companyName),
+
+      !showForgot ? e("div", {style:{width:"100%", maxWidth:220}},
+        e("input", {
+          style:{...S.input, fontSize:16, textAlign:"center", letterSpacing:5, padding:"9px 10px"},
+          type:"password", inputMode:"numeric", maxLength:6, placeholder:"••••",
+          value:pin, onChange:ev=>setPin(ev.target.value.replace(/\D/g,"")),
+          onKeyDown:ev=>{ if(ev.key==="Enter") submit(); }, autoFocus:true
+        }),
+        err && e("div", {style:{color:"#ef4444", fontSize:12, marginTop:8, textAlign:"center"}}, err),
+        e("button", {style:{...S.btn("ghost"), width:"100%", marginTop:10, fontSize:13, padding:"8px 12px", opacity:busy?0.6:1}, disabled:busy, onClick:submit}, busy?"...":"Giriş Yap"),
+        e("div", {style:{fontSize:11, color:"#666", marginTop:14, cursor:"pointer", textAlign:"center"}, onClick:()=>{setShowForgot(true); setForgotSent(false);}}, "PIN'imi unuttum")
+      ) : e("div", {style:{width:"100%", maxWidth:240}},
+        !forgotSent ? [
+          e("div", {key:"lbl", style:{fontSize:12, color:"#9a9a90", marginBottom:8, textAlign:"center"}}, "Kayıtlı e-postanızı girin, size yeni bir PIN gönderelim."),
+          e("input", {key:"inp", style:{...S.input, fontSize:14, textAlign:"center", padding:"9px 10px"},
+            type:"email", placeholder:"eposta@ornek.com", value:forgotEmail, onChange:ev=>setForgotEmail(ev.target.value), autoFocus:true
+          }),
+          e("button", {key:"btn", style:{...S.btn(), width:"100%", marginTop:10, fontSize:13, padding:"8px 12px", opacity:forgotBusy?0.6:1}, disabled:forgotBusy, onClick:submitForgot}, forgotBusy?"Gönderiliyor...":"Sıfırlama Gönder")
+        ] : e("div", {style:{fontSize:12, color:CONFIG.accentColor, textAlign:"center", padding:"10px 0"}}, "Bu e-posta kayıtlıysa, yeni PIN gönderildi. Gelen kutunuzu kontrol edin."),
+        e("div", {style:{fontSize:11, color:"#666", marginTop:14, cursor:"pointer", textAlign:"center"}, onClick:()=>{setShowForgot(false); setForgotSent(false); setForgotEmail("");}}, "← Girişe dön")
+      ),
+
+      e("div", {style:{fontSize:12, color:"#666", marginTop:20, cursor:"pointer"}, onClick:()=>{setMode("driver"); setErr(""); setPin(""); setShowForgot(false);}}, "← Şoför girişine dön"),
+      e("div", {style:{position:"fixed", bottom:20, fontSize:11, color:"#555"}}, "Powered by BuildFlow — Weblina LLC")
+    );
+  }
+
+  return e("div", {style:{...S.root, alignItems:"center", justifyContent:"center", padding:24}},
+    e("div", {style:{fontSize:64, marginBottom:10}}, CONFIG.logoText),
+    e("div", {style:{fontSize:30, fontWeight:900, color:"#f5f5f0", marginBottom:4}}, CONFIG.companyName),
+    e("div", {style:{fontSize:14, color:"#8a8a80", marginBottom:32}}, "Şoför PIN'inizi girin"),
+    e("div", {style:{width:"100%", maxWidth:320}},
+      e("input", {
+        style:{...S.input, fontSize:32, textAlign:"center", letterSpacing:10, padding:"20px 14px"},
+        type:"password", inputMode:"numeric", maxLength:6, placeholder:"••••",
+        value:pin, onChange:ev=>setPin(ev.target.value.replace(/\D/g,"")),
+        onKeyDown:ev=>{ if(ev.key==="Enter") submit(); }, autoFocus:true
+      }),
+      err && e("div", {style:{color:"#ef4444", fontSize:14, marginTop:12, textAlign:"center"}}, err),
+      e("button", {style:{...S.btn(), width:"100%", marginTop:20, fontSize:19, padding:"18px 16px", fontWeight:900}, disabled:busy, onClick:submit}, busy?"Kontrol ediliyor...":"Giriş Yap")
+    ),
+    e("div", {style:{fontSize:12, color:"#666", marginTop:28, cursor:"pointer"}, onClick:()=>{setMode("admin"); setErr(""); setPin("");}}, "Yönetici misiniz? →"),
+    e("div", {style:{position:"fixed", bottom:20, fontSize:11, color:"#555"}}, "Powered by BuildFlow — Weblina LLC")
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// MODALS
+// ══════════════════════════════════════════════════════════════
+function Modal({ title, onClose, children }) {
+  return e("div", {style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}, onClick:onClose},
+    e("div", {style:{background:"#161616",border:"1px solid #2a2a2a",borderRadius:14,padding:20,width:"100%",maxWidth:420,maxHeight:"85vh",overflowY:"auto"}, onClick:ev=>ev.stopPropagation()},
+      e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+        e("div", {style:{fontSize:17,fontWeight:800,color:"#f5f5f0"}}, title),
+        e("div", {style:{cursor:"pointer",color:"#8a8a80",fontSize:20,lineHeight:1}, onClick:onClose}, "✕")
+      ),
+      children
+    )
+  );
+}
+
+function AddTaxiModal({ onClose, onSave }) {
+  const [plate, setPlate] = useState("");
+  const [label, setLabel] = useState("");
+  const [notes, setNotes] = useState("");
+  const save = () => {
+    if (!plate && !label) return;
+    onSave({ id: genId("taxi"), plate, label: label || plate, notes, status:"Active" });
+    onClose();
+  };
+  return e(Modal, {title:"Taksi Ekle", onClose},
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Plaka"), e("input",{style:S.input, value:plate, onChange:ev=>setPlate(ev.target.value), placeholder:"34 ABC 123"})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Etiket / İsim (opsiyonel)"), e("input",{style:S.input, value:label, onChange:ev=>setLabel(ev.target.value), placeholder:"Taksi 1"})),
+    e("div", {style:{marginBottom:16}}, e("label",{style:S.label},"Notlar"), e("textarea",{style:{...S.input,minHeight:60}, value:notes, onChange:ev=>setNotes(ev.target.value)})),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Kaydet")
+  );
+}
+
+function AddDriverModal({ taxiId, onClose, onSave }) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [startDate, setStartDate] = useState(todayStr());
+  const [pinCode, setPinCode] = useState(String(Math.floor(1000+Math.random()*9000)));
+  const [salaryType, setSalaryType] = useState("percentage");
+  const [salaryValue, setSalaryValue] = useState("50");
+  const save = () => {
+    if (!firstName) return;
+    onSave({ id: genId("drv"), taxiId, firstName, lastName, phone, pin: pinCode, startDate, endDate:"", status:"Active",
+      adminNotes:"", driverNotes:"", salaryType, salaryValue:Number(salaryValue)||0 });
+    onClose();
+  };
+  return e(Modal, {title:"Şoför Ekle", onClose},
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Adı"), e("input",{style:S.input, value:firstName, onChange:ev=>setFirstName(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Soyadı"), e("input",{style:S.input, value:lastName, onChange:ev=>setLastName(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Telefon"), e("input",{style:S.input, type:"tel", value:phone, onChange:ev=>setPhone(ev.target.value), placeholder:"0532 000 00 00"})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"İşe Başlama Tarihi"), e("input",{style:S.input, type:"date", value:startDate, onChange:ev=>setStartDate(ev.target.value)})),
+    e("div", {style:{marginBottom:16}},
+      e("label",{style:S.label},"Sürücü PIN (giriş için)"),
+      e("input",{style:S.input, value:pinCode, onChange:ev=>setPinCode(ev.target.value.replace(/\D/g,""))}),
+      e("div",{style:{fontSize:11,color:"#8a8a80",marginTop:4}}, "Bu PIN'i şoförle paylaşın — kendi hesabına girmek için kullanacak.")
+    ),
+    e("div", {style:{marginBottom:12, borderTop:"1px solid #262626", paddingTop:12}},
+      e("label",{style:S.label},"Ücret Tipi"),
+      e("select",{style:S.input, value:salaryType, onChange:ev=>setSalaryType(ev.target.value)},
+        e("option",{value:"percentage"},"Yüzde (Kazançtan Pay)"),
+        e("option",{value:"flat"},"Sabit Ücret (Vardiya Başına)")
+      )
+    ),
+    e("div", {style:{marginBottom:16}},
+      e("label",{style:S.label}, salaryType==="percentage" ? "Yüzde (%)" : "Sabit Ücret (₺ / vardiya)"),
+      e("input",{style:S.input, type:"number", inputMode:"decimal", value:salaryValue, onChange:ev=>setSalaryValue(ev.target.value)})
+    ),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Kaydet")
+  );
+}
+
+function StartShiftModal({ onClose, onSave, taxiLabel }) {
+  const [kmStart, setKmStart] = useState("");
+  const save = () => {
+    if (!kmStart) return;
+    onSave({ kmStart: Number(kmStart) });
+    onClose();
+  };
+  return e(Modal, {title:"Vardiya Başlat" + (taxiLabel?" — "+taxiLabel:""), onClose},
+    e("div", {style:{marginBottom:16}},
+      e("label",{style:S.label},"Km Başlangıç"),
+      e("input",{style:S.input, type:"number", inputMode:"decimal", value:kmStart, onChange:ev=>setKmStart(ev.target.value), autoFocus:true})
+    ),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Vardiyayı Başlat")
+  );
+}
+
+function EndShiftModal({ onClose, onSave, kmStart }) {
+  const [kmEnd, setKmEnd] = useState("");
+  const [notes, setNotes] = useState("");
+  const km = Math.max(0, (Number(kmEnd)||0) - (Number(kmStart)||0));
+  const save = () => {
+    if (!kmEnd) return;
+    onSave({ kmEnd:Number(kmEnd), notes });
+    onClose();
+  };
+  return e(Modal, {title:"Vardiyayı Bitir", onClose},
+    e("div", {style:{marginBottom:4}}, e("label",{style:S.label},"Km Bitiş"), e("input",{style:S.input, type:"number", inputMode:"decimal", value:kmEnd, onChange:ev=>setKmEnd(ev.target.value), autoFocus:true})),
+    km > 0 && e("div", {style:{fontSize:12, color:CONFIG.accentColor, margin:"8px 0", fontWeight:700}}, "Bu vardiya: " + fmtKm(km)),
+    e("div", {style:{marginBottom:16, marginTop:12}}, e("label",{style:S.label},"Notlar"), e("textarea",{style:{...S.input,minHeight:50}, value:notes, onChange:ev=>setNotes(ev.target.value)})),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Vardiyayı Bitir")
+  );
+}
+
+function AddExpenseModal({ taxis, defaultTaxiId, onClose, onSave }) {
+  const [taxiId, setTaxiId] = useState(defaultTaxiId || (taxis[0] && taxis[0].id) || "");
+  const [date, setDate] = useState(todayStr());
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState(CONFIG.expenseCategories[0]);
+  const [vendor, setVendor] = useState("");
+  const [notes, setNotes] = useState("");
+  const save = () => {
+    if (!amount || !taxiId) return;
+    onSave({ id: genId("exp"), taxiId, date, amount:Number(amount)||0, category, vendor, notes });
+    onClose();
+  };
+  return e(Modal, {title:"Gider Ekle", onClose},
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Taksi"),
+      e("select",{style:S.input, value:taxiId, onChange:ev=>setTaxiId(ev.target.value)},
+        taxis.map(t=>e("option",{key:t.id, value:t.id}, t.label))
+      )
+    ),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Tarih"), e("input",{style:S.input, type:"date", value:date, onChange:ev=>setDate(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Tutar (₺)"), e("input",{style:S.input, type:"number", inputMode:"decimal", value:amount, onChange:ev=>setAmount(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Kategori"),
+      e("select",{style:S.input, value:category, onChange:ev=>setCategory(ev.target.value)},
+        CONFIG.expenseCategories.map(c=>e("option",{key:c,value:c},c))
+      )
+    ),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Tedarikçi"), e("input",{style:S.input, value:vendor, onChange:ev=>setVendor(ev.target.value)})),
+    e("div", {style:{marginBottom:16}}, e("label",{style:S.label},"Notlar"), e("textarea",{style:{...S.input,minHeight:50}, value:notes, onChange:ev=>setNotes(ev.target.value)})),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Kaydet")
+  );
+}
+
+function AddVendorModal({ categories, onClose, onSave }) {
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [notes, setNotes] = useState("");
+  const [category, setCategory] = useState(categories[0]);
+  const save = () => {
+    if (!name) return;
+    onSave(category, { id: genId("v"), name, phone, notes });
+    onClose();
+  };
+  return e(Modal, {title:"Tedarikçi Ekle", onClose},
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Kategori"),
+      e("select",{style:S.input, value:category, onChange:ev=>setCategory(ev.target.value)},
+        categories.map(c=>e("option",{key:c,value:c},c))
+      )
+    ),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"İsim"), e("input",{style:S.input, value:name, onChange:ev=>setName(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Telefon"), e("input",{style:S.input, type:"tel", value:phone, onChange:ev=>setPhone(ev.target.value)})),
+    e("div", {style:{marginBottom:16}}, e("label",{style:S.label},"Notlar"), e("textarea",{style:{...S.input,minHeight:50}, value:notes, onChange:ev=>setNotes(ev.target.value)})),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Kaydet")
+  );
+}
+
+function EditTaxiModal({ taxi, onClose, onSave }) {
+  const [plate, setPlate] = useState(taxi.plate || "");
+  const [label, setLabel] = useState(taxi.label || "");
+  const [notes, setNotes] = useState(taxi.notes || "");
+  const [status, setStatus] = useState(taxi.status || "Active");
+  const save = () => {
+    if (!plate && !label) return;
+    onSave({ ...taxi, plate, label: label || plate, notes, status });
+    onClose();
+  };
+  return e(Modal, {title:"Taksiyi Düzenle", onClose},
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Plaka"), e("input",{style:S.input, value:plate, onChange:ev=>setPlate(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Etiket / İsim"), e("input",{style:S.input, value:label, onChange:ev=>setLabel(ev.target.value)})),
+    e("div", {style:{marginBottom:12}}, e("label",{style:S.label},"Durum"),
+      e("select",{style:S.input, value:status, onChange:ev=>setStatus(ev.target.value)},
+        e("option",{value:"Active"},"Aktif"), e("option",{value:"Inactive"},"Pasif")
+      )
+    ),
+    e("div", {style:{marginBottom:16}}, e("label",{style:S.label},"Notlar"), e("textarea",{style:{...S.input,minHeight:60}, value:notes, onChange:ev=>setNotes(ev.target.value)})),
+    e("button", {style:{...S.btn(), width:"100%"}, onClick:save}, "Kaydet")
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// STAT ROW
+// ══════════════════════════════════════════════════════════════
+function StatRow({ stats }) {
+  return e("div", {style:{display:"flex", gap:8, flexWrap:"wrap", marginTop:10}},
+    stats.map((s,i) => e("div", {key:i, style:S.statBox},
+      e("div", {style:{...S.statVal, color: s.color||"#f5f5f0"}}, s.val),
+      e("div", {style:S.statLbl}, s.lbl)
+    ))
+  );
+}
+
+// Collapsed shift-history row: date + total earnings, expands on tap for full detail
+function ShiftHistoryRow({ sh, driver }) {
+  const [open, setOpen] = useState(false);
+  const s = shiftStats(sh);
+  const payout = driver ? computePayout(driver, s.earnings) : null;
+  return e("div", {style:{...S.card, padding:0, marginBottom:8, overflow:"hidden"}},
+    e("div", {style:{padding:12, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"}, onClick:()=>setOpen(!open)},
+      e("div", null,
+        e("div",{style:{fontWeight:700,fontSize:13,color:"#f5f5f0"}}, fmtDate(sh.date)),
+        e("div",{style:{fontSize:11,color:"#8a8a80"}}, (sh.timeStart||"") + (sh.timeEnd?" – "+sh.timeEnd:""))
+      ),
+      e("div", {style:{display:"flex",alignItems:"center",gap:10}},
+        e("div",{style:{fontSize:15,fontWeight:800,color:CONFIG.accentColor}}, fmtTL(s.earnings)),
+        e("div",{style:{fontSize:11,color:"#666"}}, open?"▲":"▼")
+      )
+    ),
+    open && e("div", {style:{padding:"0 12px 12px", borderTop:"1px solid #262626"}},
+      e("div", {style:{display:"flex",gap:14,flexWrap:"wrap",marginTop:10}},
+        e("div", {style:{fontSize:12,color:"#c8c8c0"}}, fmtKm(s.km)),
+        (sh.rides && sh.rides.length) ? e("div", {style:{fontSize:12,color:"#8a8a80"}}, sh.rides.length+" sefer") : null,
+        e("div", {style:{fontSize:12,color:"#c8c8c0"}}, "Yakıt: " + fmtTL(s.fuelCost) + (s.liters?" ("+s.liters+" L)":"")),
+        e("div", {style:{fontSize:12,color:"#8a8a80"}}, s.perKm.toFixed(2)+" ₺/km")
+      ),
+      payout !== null && e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700,marginTop:8}}, "Şoför Payı: " + fmtTL(payout)),
+      sh.rides && sh.rides.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:8}}, "Seferler: " + sh.rides.map(r=>fmtTL(r.amount)+" ("+r.time+")").join(" · ")),
+      sh.fuel && sh.fuel.length > 0 && e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:4}}, "Yakıt: " + sh.fuel.map(f=>fmtTL(f.amount)+" @ "+fmtKm(f.km)).join(" · ")),
+      sh.notes && e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:8,fontStyle:"italic"}}, sh.notes)
+    )
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// ADMIN: HOME (Taxi cards → Driver cards)
+// ══════════════════════════════════════════════════════════════
+function AdminHomeView({ pin, taxis, drivers, shifts, onReload, showToast, openDriver }) {
+  const [showAddTaxi, setShowAddTaxi] = useState(false);
+  const [showAddDriverFor, setShowAddDriverFor] = useState(null);
+  const [editingTaxi, setEditingTaxi] = useState(null);
+  const [expanded, setExpanded] = useState(() => new Set(taxis.map(t=>t.id)));
+  const [fuelOpenFor, setFuelOpenFor] = useState(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const toggle = (id) => setExpanded(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+  const filteredShifts = filterByDate(shifts, dateFrom, dateTo);
+
+  const saveTaxi = async (t) => {
+    try { await api(pin, "addTaxi", {taxi:t}); showToast("Taksi eklendi"); onReload(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const updateTaxiFn = async (t) => {
+    try { await api(pin, "updateTaxi", {taxi:t}); showToast("Taksi güncellendi"); onReload(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const deleteTaxiFn = async (t) => {
+    const driverCount = drivers.filter(d=>d.taxiId===t.id).length;
+    const msg = driverCount > 0
+      ? t.label + " silinsin mi? Bu taksiye bağlı " + driverCount + " şoför var — kayıtları kalır ama taksiye atanmamış görünür."
+      : t.label + " silinsin mi?";
+    if (!confirm(msg)) return;
+    try { await api(pin, "deleteTaxi", {taxiId:t.id}); showToast("Taksi silindi"); onReload(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const saveDriver = async (d) => {
+    try { await api(pin, "addDriver", {driver:d}); showToast("Şoför eklendi"); onReload(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+
+  return e("div", null,
+    e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+      e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0"}}, "Taksiler"),
+      e("button", {style:S.btn(), onClick:()=>setShowAddTaxi(true)}, "+ Taksi Ekle")
+    ),
+    e(DateFilterBar, {from:dateFrom, to:dateTo, onChange:(f,t)=>{setDateFrom(f);setDateTo(t);}}),
+    taxis.length===0 && e("div", {style:{...S.card, textAlign:"center", color:"#8a8a80"}}, "Henüz taksi eklenmedi. Başlamak için “+ Taksi Ekle” butonuna dokunun."),
+    taxis.map(taxi => {
+      const taxiDrivers = drivers.filter(d => d.taxiId === taxi.id);
+      const taxiShifts = filteredShifts.filter(sh => taxiDrivers.some(d=>d.id===sh.driverId));
+      const agg = aggregateShifts(taxiShifts);
+      const taxiFuel = taxiShifts.flatMap(sh => (sh.fuel||[]).map(f => ({...f, date:sh.date, driverName:(drivers.find(d=>d.id===sh.driverId)||{}).firstName||"?"})))
+        .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (b.time||"").localeCompare(a.time||""));
+      const isOpen = expanded.has(taxi.id);
+      const fuelOpen = fuelOpenFor === taxi.id;
+      return e("div", {key:taxi.id, style:{...S.card, borderColor: CONFIG.accentColor+"55"}},
+        e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}},
+          e("div", {style:{cursor:"pointer",flex:1}, onClick:()=>toggle(taxi.id)},
+            e("div", {style:{fontSize:17,fontWeight:800,color:"#f5f5f0"}}, "🚕 " + taxi.label + (taxi.status==="Inactive"?"  ":"")),
+            taxi.plate && e("div", {style:{fontSize:12,color:"#9a9a90",marginTop:2}}, taxi.plate),
+            taxi.status==="Inactive" && e("span",{style:{fontSize:10,color:"#ef4444",border:"1px solid #ef4444",borderRadius:6,padding:"1px 6px",marginTop:4,display:"inline-block"}}, "Pasif")
+          ),
+          e("div", {style:{display:"flex",alignItems:"center",gap:10}},
+            e("span", {style:{fontSize:11,color:CONFIG.accentColor,cursor:"pointer"}, onClick:()=>setEditingTaxi(taxi)}, "Düzenle"),
+            e("span", {style:{fontSize:11,color:"#ef4444",cursor:"pointer"}, onClick:()=>deleteTaxiFn(taxi)}, "Sil"),
+            e("div", {style:{fontSize:12,color:"#8a8a80",cursor:"pointer"}, onClick:()=>toggle(taxi.id)}, taxiDrivers.length + " şoför " + (isOpen?"▲":"▼"))
+          )
+        ),
+        e(StatRow, {stats:[
+          {val: fmtTL(agg.earnings), lbl:"Toplam Kazanç"},
+          {val: fmtKm(agg.km), lbl:"Toplam Km"},
+          {val: agg.perKm.toFixed(2)+" ₺/km", lbl:"Km Başı Kazanç", color:CONFIG.accentColor},
+          {val: fmtTL(agg.fuelCost) + " (" + taxiFuel.length + ")", lbl:"Yakıt Alımı"},
+        ]}),
+        taxiFuel.length > 0 && e("div", {style:{marginTop:8}},
+          e("span", {style:{fontSize:11,color:CONFIG.accentColor,cursor:"pointer"}, onClick:()=>setFuelOpenFor(fuelOpen?null:taxi.id)}, (fuelOpen?"▲ ":"▼ ") + "Yakıt Geçmişi"),
+          fuelOpen && e("div", {style:{marginTop:8, display:"flex", flexDirection:"column", gap:6}},
+            taxiFuel.map((f,idx) => e("div", {key:idx, style:{display:"flex",justifyContent:"space-between",background:"#0f0f0f",border:"1px solid #262626",borderRadius:8,padding:"7px 10px"}},
+              e("div", null,
+                e("div", {style:{fontSize:12,color:"#f5f5f0",fontWeight:700}}, fmtTL(f.amount) + (f.liters?" ("+f.liters+" L)":"")),
+                e("div", {style:{fontSize:11,color:"#8a8a80"}}, fmtDate(f.date) + " · " + f.time + " · " + f.driverName)
+              ),
+              e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtKm(f.km))
+            ))
+          )
+        ),
+        isOpen && e("div", {style:{marginTop:14}},
+          taxiDrivers.length===0 && e("div", {style:{fontSize:13,color:"#8a8a80",marginBottom:10}}, "Bu taksiye henüz şoför atanmadı."),
+          taxiDrivers.map(dr => {
+            const drShifts = filteredShifts.filter(sh => sh.driverId === dr.id);
+            const a = aggregateShifts(drShifts);
+            const isActive = shifts.some(sh => sh.driverId === dr.id && sh.status === "open");
+            return e("div", {key:dr.id, style:{background:"#0f0f0f",border:"1px solid "+(isActive?CONFIG.accentColor:"#262626"),borderRadius:10,padding:12,marginBottom:8,cursor:"pointer"}, onClick:()=>openDriver(dr.id)},
+              e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+                e("div", {style:{fontWeight:700,color:"#f5f5f0",fontSize:14,display:"flex",alignItems:"center",gap:6}},
+                  dr.firstName + " " + dr.lastName,
+                  isActive && e("span",{style:{fontSize:9,color:CONFIG.accentColor,border:"1px solid "+CONFIG.accentColor,borderRadius:5,padding:"1px 5px",fontWeight:700}}, "🟢 VARDİYADA")
+                ),
+                e("div", {style:{fontSize:11,color:"#666"}}, dr.phone)
+              ),
+              e("div", {style:{display:"flex",gap:14,marginTop:8,flexWrap:"wrap"}},
+                e("div", {style:{fontSize:12,color:"#9a9a90"}}, a.count + " vardiya"),
+                e("div", {style:{fontSize:12,color:"#9a9a90"}}, fmtKm(a.km)),
+                e("div", {style:{fontSize:12,color:CONFIG.accentColor,fontWeight:700}}, fmtTL(a.earnings)),
+                e("div", {style:{fontSize:12,color:"#9a9a90"}}, a.perKm.toFixed(2)+" ₺/km")
+              )
+            );
+          }),
+          e("button", {style:{...S.btn("ghost"), width:"100%", marginTop:4}, onClick:(ev)=>{ev.stopPropagation();setShowAddDriverFor(taxi.id);}}, "+ Şoför Ekle")
+        )
+      );
+    }),
+    showAddTaxi && e(AddTaxiModal, {onClose:()=>setShowAddTaxi(false), onSave:saveTaxi}),
+    showAddDriverFor && e(AddDriverModal, {taxiId:showAddDriverFor, onClose:()=>setShowAddDriverFor(null), onSave:saveDriver}),
+    editingTaxi && e(EditTaxiModal, {taxi:editingTaxi, onClose:()=>setEditingTaxi(null), onSave:updateTaxiFn})
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// ADMIN: DRIVER DETAIL
+// ══════════════════════════════════════════════════════════════
+function DriverDetailView({ pin, driver, taxi, shifts, onBack, onReload, onReloadShifts, showToast }) {
+  const [adminNote, setAdminNote] = useState(driver.adminNotes || "");
+  const [savingNote, setSavingNote] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [phone, setPhone] = useState(driver.phone || "");
+  const [status, setStatus] = useState(driver.status || "Active");
+  const [salaryType, setSalaryType] = useState(driver.salaryType || "percentage");
+  const [salaryValue, setSalaryValue] = useState(driver.salaryValue !== undefined ? String(driver.salaryValue) : "50");
+  const [showEndActive, setShowEndActive] = useState(false);
+  const [resettingPin, setResettingPin] = useState(false);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const activeShift = shifts.find(sh => sh.status === "open");
+  const filteredShifts = filterByDate(shifts, dateFrom, dateTo);
+  const closedShifts = filteredShifts.filter(sh => sh.status !== "open");
+  const agg = aggregateShifts(filteredShifts); // includes running total of any open shift within range
+  const sorted = [...closedShifts].sort((a,b)=> (b.date||"").localeCompare(a.date||""));
+  const allFuel = filteredShifts.flatMap(sh => (sh.fuel||[]).map(f => ({...f, date:sh.date})))
+    .sort((a,b)=> (b.date||"").localeCompare(a.date||"") || (b.time||"").localeCompare(a.time||""));
+
+  const saveNote = async () => {
+    setSavingNote(true);
+    try { await api(pin, "updateAdminNote", {driverId:driver.id, note:adminNote}); showToast("Not kaydedildi"); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setSavingNote(false);
+  };
+
+  const saveEdits = async () => {
+    try {
+      await api(pin, "updateDriver", {driver:{...driver, phone, status, salaryType, salaryValue:Number(salaryValue)||0}});
+      showToast("Güncellendi"); setEditing(false); onReload();
+    } catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+
+  const removeDriver = async () => {
+    if (!confirm(driver.firstName + " " + driver.lastName + " silinsin mi?")) return;
+    try { await api(pin, "deleteDriver", {driverId:driver.id}); showToast("Şoför silindi"); onBack(); onReload(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+
+  const resetPin = async () => {
+    if (!confirm("Bu şoförün PIN'i yenilensin mi?")) return;
+    setResettingPin(true);
+    try {
+      const res = await api(pin, "resetDriverPin", {driverId:driver.id});
+      showToast("Yeni PIN: " + res.pin);
+      onReload();
+    } catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setResettingPin(false);
+  };
+
+  const forceEndShift = async ({ kmEnd, notes }) => {
+    try { await api(pin, "endShift", {shiftId:activeShift.id, kmEnd, notes}); showToast("Vardiya kapatıldı"); await onReloadShifts(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const deleteStrayShift = async () => {
+    if (!confirm("Bu açık vardiya silinsin mi? (Kurtarılamaz)")) return;
+    try { await api(pin, "deleteShift", {shiftId:activeShift.id}); showToast("Vardiya silindi"); await onReloadShifts(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+
+  return e("div", null,
+    e("div", {style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
+      e("div", {style:{cursor:"pointer",fontSize:20,color:"#9a9a90"}, onClick:onBack}, "←"),
+      e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0"}}, driver.firstName + " " + driver.lastName),
+      status==="Inactive" && e("span",{style:{fontSize:11,color:"#ef4444",border:"1px solid #ef4444",borderRadius:6,padding:"2px 8px"}}, "Pasif"),
+      activeShift && e("span",{style:{fontSize:11,color:CONFIG.accentColor,border:"1px solid "+CONFIG.accentColor,borderRadius:6,padding:"2px 8px",fontWeight:700}}, "🟢 Vardiyada")
+    ),
+    activeShift && e("div", {style:{...S.card, borderColor:CONFIG.accentColor, borderWidth:2}},
+      e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        e("div", {style:{fontSize:13,fontWeight:800,color:CONFIG.accentColor}}, "Aktif Vardiya — Başlangıç: " + activeShift.timeStart),
+        e("div", {style:{fontSize:12,color:"#9a9a90"}}, (activeShift.rides||[]).length + " sefer")
+      ),
+      e("div", {style:{fontSize:22,fontWeight:900,color:"#f5f5f0",marginTop:6}}, fmtTL(activeShift.earnings)),
+      e("div", {style:{display:"flex",gap:8,marginTop:10}},
+        e("button", {style:{...S.btn("ghost"), fontSize:12, padding:"6px 12px"}, onClick:()=>setShowEndActive(true)}, "Vardiyayı Kapat"),
+        e("button", {style:{...S.btn("danger"), fontSize:12, padding:"6px 12px"}, onClick:deleteStrayShift}, "Sil")
+      )
+    ),
+    e("div", {style:S.card},
+      e("div", {style:{fontSize:12,color:"#8a8a80",marginBottom:4}}, taxi ? "🚕 " + taxi.label : ""),
+      e("div", {style:{fontSize:13,color:"#c8c8c0"}}, "📞 " + (driver.phone||"—")),
+      e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:4}}, "İşe Başlama: " + fmtDate(driver.startDate) + (driver.endDate ? " · Ayrılış: "+fmtDate(driver.endDate) : "")),
+      e("div", {style:{display:"flex",alignItems:"center",gap:10,marginTop:8}},
+        e("div", {style:{fontSize:12,color:"#8a8a80"}}, "PIN: "),
+        e("div", {style:{fontSize:16,color:"#f5f5f0",fontWeight:800,letterSpacing:2}}, driver.pin || "····"),
+        e("span", {style:{fontSize:11,color:CONFIG.accentColor,cursor:"pointer",opacity:resettingPin?0.5:1}, onClick:resettingPin?null:resetPin}, resettingPin?"...":"PIN'i Yenile")
+      ),
+      e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:6}},
+        "Ücret: " + (driver.salaryType==="flat" ? fmtTL(driver.salaryValue) + " / vardiya" : (driver.salaryValue||0) + "% / vardiya")
+      ),
+      e(StatRow, {stats:[
+        {val: fmtTL(agg.earnings), lbl:"Toplam Kazanç"},
+        {val: fmtTL(agg.fuelCost), lbl:"Toplam Yakıt"},
+        {val: fmtTL(agg.net), lbl:"Net (Kazanç-Yakıt)", color:CONFIG.accentColor},
+        {val: fmtKm(agg.km), lbl:"Toplam Km"},
+        {val: agg.perKm.toFixed(2)+" ₺/km", lbl:"Km Başı Kazanç", color:CONFIG.accentColor},
+      ]}),
+      !editing
+        ? e("button", {style:{...S.btn("ghost"), marginTop:12}, onClick:()=>setEditing(true)}, "Düzenle")
+        : e("div", {style:{marginTop:12}},
+            e("div", {style:{marginBottom:10}}, e("label",{style:S.label},"Telefon"), e("input",{style:S.input, value:phone, onChange:ev=>setPhone(ev.target.value)})),
+            e("div", {style:{marginBottom:10}}, e("label",{style:S.label},"Durum"),
+              e("select",{style:S.input, value:status, onChange:ev=>setStatus(ev.target.value)},
+                e("option",{value:"Active"},"Aktif"), e("option",{value:"Inactive"},"Pasif")
+              )
+            ),
+            e("div", {style:{marginBottom:10}}, e("label",{style:S.label},"Ücret Tipi"),
+              e("select",{style:S.input, value:salaryType, onChange:ev=>setSalaryType(ev.target.value)},
+                e("option",{value:"percentage"},"Yüzde (Kazançtan Pay)"),
+                e("option",{value:"flat"},"Sabit Ücret (Vardiya Başına)")
+              )
+            ),
+            e("div", {style:{marginBottom:10}}, e("label",{style:S.label}, salaryType==="percentage"?"Yüzde (%)":"Sabit Ücret (₺)"),
+              e("input",{style:S.input, type:"number", inputMode:"decimal", value:salaryValue, onChange:ev=>setSalaryValue(ev.target.value)})
+            ),
+            e("div", {style:{display:"flex",gap:8}},
+              e("button", {style:S.btn(), onClick:saveEdits}, "Kaydet"),
+              e("button", {style:S.btn("ghost"), onClick:()=>setEditing(false)}, "İptal"),
+              e("button", {style:S.btn("danger"), onClick:removeDriver}, "Sil")
+            )
+          )
+    ),
+    e("div", {style:{...S.card}},
+      e("div", {style:S.label}, "Yönetici Notu (şoför göremez)"),
+      e("textarea", {style:{...S.input,minHeight:70,marginTop:4}, value:adminNote, onChange:ev=>setAdminNote(ev.target.value)}),
+      e("button", {style:{...S.btn(), marginTop:8, opacity:savingNote?0.6:1}, disabled:savingNote, onClick:saveNote}, savingNote?"Kaydediliyor...":"Notu Kaydet"),
+      driver.driverNotes && e("div", {style:{marginTop:14, borderTop:"1px solid #262626", paddingTop:10}},
+        e("div", {style:S.label}, "Şoförden Gelen Not"),
+        e("div", {style:{fontSize:13,color:"#c8c8c0",marginTop:4}}, driver.driverNotes)
+      )
+    ),
+
+    allFuel.length > 0 && e("div", {style:S.card},
+      e("div", {style:S.label}, "⛽ Yakıt Alımları"),
+      e("div", {style:{marginTop:8, display:"flex", flexDirection:"column", gap:6}},
+        allFuel.map((f,idx) => e("div", {key:idx, style:{display:"flex",justifyContent:"space-between",background:"#0f0f0f",border:"1px solid #262626",borderRadius:8,padding:"8px 10px"}},
+          e("div", null,
+            e("div", {style:{fontSize:13,color:"#f5f5f0",fontWeight:700}}, fmtTL(f.amount) + (f.liters?" ("+f.liters+" L)":"")),
+            e("div", {style:{fontSize:11,color:"#8a8a80"}}, fmtDate(f.date) + " · " + f.time)
+          ),
+          e("div", {style:{fontSize:13,color:CONFIG.accentColor,fontWeight:700}}, fmtKm(f.km))
+        ))
+      )
+    ),
+
+    e("div", {style:{fontSize:14,fontWeight:800,color:"#f5f5f0",margin:"16px 0 8px"}}, "Vardiya Geçmişi"),
+    e(DateFilterBar, {from:dateFrom, to:dateTo, onChange:(f,t)=>{setDateFrom(f);setDateTo(t);}}),
+    sorted.length===0 && e("div", {style:{color:"#8a8a80",fontSize:13}}, "Henüz vardiya kaydı yok."),
+    sorted.map(sh => e(ShiftHistoryRow, {key:sh.id, sh, driver})),
+    showEndActive && activeShift && e(EndShiftModal, {kmStart: activeShift.kmStart, onClose:()=>setShowEndActive(false), onSave:forceEndShift})
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// ADMIN: EXPENSES
+// ══════════════════════════════════════════════════════════════
+function ExpensesView({ pin, taxis, showToast }) {
+  const [expenses, setExpenses] = useState([]);
+  const [filterTaxi, setFilterTaxi] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try { const d = await api(pin, "getExpenses", {taxiId: filterTaxi||undefined}); setExpenses(d.expenses||[]); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setLoading(false);
+  };
+  useEffect(()=>{ load(); }, [filterTaxi]);
+
+  const save = async (exp) => {
+    try { await api(pin,"addExpense",{expense:exp}); showToast("Gider eklendi"); load(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const remove = async (id) => {
+    if (!confirm("Bu gider silinsin mi?")) return;
+    try { await api(pin,"deleteExpense",{expenseId:id}); load(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+
+  const total = expenses.reduce((s,x)=>s+(Number(x.amount)||0),0);
+  const taxiName = (id) => (taxis.find(t=>t.id===id)||{}).label || "—";
+
+  return e("div", null,
+    e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+      e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0"}}, "Giderler"),
+      e("button", {style:S.btn(), onClick:()=>setShowAdd(true)}, "+ Gider Ekle")
+    ),
+    e("select", {style:{...S.input,marginBottom:12}, value:filterTaxi, onChange:ev=>setFilterTaxi(ev.target.value)},
+      e("option",{value:""},"Tüm Taksiler"),
+      taxis.map(t=>e("option",{key:t.id,value:t.id},t.label))
+    ),
+    e("div", {style:{...S.card, display:"flex",justifyContent:"space-between",alignItems:"center"}},
+      e("div", {style:{fontSize:12,color:"#8a8a80",textTransform:"uppercase"}}, "Toplam Gider"),
+      e("div", {style:{fontSize:20,fontWeight:900,color:CONFIG.accentColor}}, fmtTL(total))
+    ),
+    loading && e("div",{style:{color:"#8a8a80"}},"Yükleniyor..."),
+    !loading && expenses.length===0 && e("div", {style:{color:"#8a8a80",fontSize:13}}, "Gider kaydı yok."),
+    [...expenses].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).map(x =>
+      e("div", {key:x.id, style:{...S.card, padding:12}},
+        e("div", {style:{display:"flex",justifyContent:"space-between"}},
+          e("div", {style:{fontWeight:700,fontSize:14,color:"#f5f5f0"}}, x.category),
+          e("div", {style:{fontWeight:800,fontSize:14,color:CONFIG.accentColor}}, fmtTL(x.amount))
+        ),
+        e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:4}}, fmtDate(x.date) + " · " + taxiName(x.taxiId) + (x.vendor?" · "+x.vendor:"")),
+        x.notes && e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:4,fontStyle:"italic"}}, x.notes),
+        e("div", {style:{textAlign:"right",marginTop:6}}, e("span",{style:{fontSize:11,color:"#ef4444",cursor:"pointer"}, onClick:()=>remove(x.id)}, "Sil"))
+      )
+    ),
+    showAdd && e(AddExpenseModal, {taxis, defaultTaxiId:filterTaxi, onClose:()=>setShowAdd(false), onSave:save})
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// ADMIN: VENDORS
+// ══════════════════════════════════════════════════════════════
+function VendorsView({ pin, showToast }) {
+  const [vendors, setVendors] = useState({});
+  const [categories, setCategories] = useState(CONFIG.vendorCategories);
+  const [showAdd, setShowAdd] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const d = await api(pin,"getVendors");
+      setVendors(d.vendors||{});
+      if (d.categories && d.categories.length) setCategories(d.categories);
+    } catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setLoading(false);
+  };
+  useEffect(()=>{ load(); }, []);
+
+  const addVendor = async (cat, v) => {
+    const next = {...vendors, [cat]: [...(vendors[cat]||[]), v]};
+    setVendors(next);
+    try { await api(pin,"saveVendors",{vendors:next, categories}); showToast("Tedarikçi eklendi"); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const removeVendor = async (cat, id) => {
+    const next = {...vendors, [cat]: (vendors[cat]||[]).filter(v=>v.id!==id)};
+    setVendors(next);
+    try { await api(pin,"saveVendors",{vendors:next, categories}); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+
+  return e("div", null,
+    e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+      e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0"}}, "Tedarikçiler"),
+      e("button", {style:S.btn(), onClick:()=>setShowAdd(true)}, "+ Tedarikçi Ekle")
+    ),
+    loading && e("div",{style:{color:"#8a8a80"}},"Yükleniyor..."),
+    !loading && categories.map(cat => {
+      const list = vendors[cat] || [];
+      if (list.length===0) return null;
+      return e("div", {key:cat, style:{marginBottom:16}},
+        e("div", {style:{fontSize:12,fontWeight:700,color:CONFIG.accentColor,textTransform:"uppercase",marginBottom:6}}, cat),
+        list.map(v => e("div", {key:v.id, style:{...S.card, padding:12}},
+          e("div", {style:{display:"flex",justifyContent:"space-between"}},
+            e("div", {style:{fontWeight:700,fontSize:14,color:"#f5f5f0"}}, v.name),
+            e("span",{style:{fontSize:11,color:"#ef4444",cursor:"pointer"}, onClick:()=>removeVendor(cat,v.id)}, "Sil")
+          ),
+          v.phone && e("div", {style:{fontSize:12,color:"#9a9a90",marginTop:2}}, "📞 " + v.phone),
+          v.notes && e("div", {style:{fontSize:12,color:"#8a8a80",marginTop:4}}, v.notes)
+        ))
+      );
+    }),
+    !loading && Object.values(vendors).every(l=>!l || l.length===0) && e("div",{style:{color:"#8a8a80",fontSize:13}},"Tedarikçi kaydı yok."),
+    showAdd && e(AddVendorModal, {categories, onClose:()=>setShowAdd(false), onSave:addVendor})
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// ADMIN: SETTINGS (change admin PIN)
+// ══════════════════════════════════════════════════════════════
+function SettingsView({ pin, adminEmail, onPinChanged, onEmailChanged, showToast }) {
+  const [currentPin, setCurrentPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState(adminEmail || "");
+  const [emailBusy, setEmailBusy] = useState(false);
+
+  const submit = async () => {
+    if (!currentPin || !newPin) return;
+    if (newPin.length < 4) { showToast("Yeni PIN en az 4 haneli olmalı", "err"); return; }
+    if (newPin !== confirmPin) { showToast("Yeni PIN'ler eşleşmiyor", "err"); return; }
+    setBusy(true);
+    try {
+      await api(pin, "updateAdminPin", {currentPin, newPin});
+      showToast("Yönetici PIN'i güncellendi");
+      setCurrentPin(""); setNewPin(""); setConfirmPin("");
+      onPinChanged(newPin); // keep the session alive under the new PIN
+    } catch(ex) { showToast("Hata: "+ex.message, "err"); }
+    setBusy(false);
+  };
+
+  const submitEmail = async () => {
+    if (!email) return;
+    setEmailBusy(true);
+    try {
+      await api(pin, "setAdminEmail", {email});
+      showToast("E-posta kaydedildi");
+      onEmailChanged(email);
+    } catch(ex) { showToast("Hata: "+ex.message, "err"); }
+    setEmailBusy(false);
+  };
+
+  return e("div", null,
+    e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0",marginBottom:16}}, "Ayarlar"),
+    e("div", {style:S.card},
+      e("div", {style:S.label}, "Yönetici E-postası"),
+      e("div", {style:{fontSize:11,color:"#8a8a80",marginTop:4,marginBottom:10}}, "PIN'inizi unutursanız, yeni bir PIN buraya gönderilir."),
+      e("input",{style:S.input, type:"email", placeholder:"eposta@ornek.com", value:email, onChange:ev=>setEmail(ev.target.value)}),
+      e("button", {style:{...S.btn("ghost"), width:"100%", marginTop:10, opacity:emailBusy?0.6:1}, disabled:emailBusy, onClick:submitEmail}, emailBusy?"Kaydediliyor...":"E-postayı Kaydet")
+    ),
+    e("div", {style:S.card},
+      e("div", {style:S.label}, "Yönetici PIN'ini Değiştir"),
+      e("div", {style:{marginTop:10,marginBottom:10}}, e("label",{style:S.label},"Mevcut PIN"), e("input",{style:S.input, type:"password", inputMode:"numeric", value:currentPin, onChange:ev=>setCurrentPin(ev.target.value.replace(/\D/g,""))})),
+      e("div", {style:{marginBottom:10}}, e("label",{style:S.label},"Yeni PIN"), e("input",{style:S.input, type:"password", inputMode:"numeric", value:newPin, onChange:ev=>setNewPin(ev.target.value.replace(/\D/g,""))})),
+      e("div", {style:{marginBottom:16}}, e("label",{style:S.label},"Yeni PIN (Tekrar)"), e("input",{style:S.input, type:"password", inputMode:"numeric", value:confirmPin, onChange:ev=>setConfirmPin(ev.target.value.replace(/\D/g,""))})),
+      e("button", {style:{...S.btn(), width:"100%", opacity:busy?0.6:1}, disabled:busy, onClick:submit}, busy?"Kaydediliyor...":"PIN'i Güncelle")
+    )
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// DRIVER DASHBOARD (kendi hesabı)
+// ══════════════════════════════════════════════════════════════
+function DriverDashboard({ pin, driver, taxi, shifts, onReload, onReloadShifts, showToast }) {
+  const [showStart, setShowStart] = useState(false);
+  const [showEnd, setShowEnd] = useState(false);
+  const [rideInput, setRideInput] = useState("");
+  const [addingRide, setAddingRide] = useState(false);
+  const [fuelKm, setFuelKm] = useState("");
+  const [fuelAmount, setFuelAmount] = useState("");
+  const [fuelLiters, setFuelLiters] = useState("");
+  const [addingFuel, setAddingFuel] = useState(false);
+  const [note, setNote] = useState(driver.driverNotes || "");
+  const [savingNote, setSavingNote] = useState(false);
+  const [startBusy, setStartBusy] = useState(false);
+
+  const activeShift = shifts.find(sh => sh.status === "open");
+  const closedShifts = shifts.filter(sh => sh.status !== "open");
+  const sorted = [...closedShifts].sort((a,b)=> (b.date||"").localeCompare(a.date||""));
+
+  const startShift = async ({ kmStart }) => {
+    setStartBusy(true);
+    try { await api(pin, "startShift", {kmStart}); showToast("Vardiya başlatıldı"); await onReloadShifts(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setStartBusy(false);
+  };
+  const addRide = async () => {
+    const v = Number(rideInput);
+    if (!v || v <= 0 || !activeShift) return;
+    setAddingRide(true);
+    try { await api(pin, "addRide", {shiftId:activeShift.id, amount:v}); setRideInput(""); await onReloadShifts(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setAddingRide(false);
+  };
+  const addFuel = async () => {
+    const amt = Number(fuelAmount);
+    if (!amt || amt <= 0 || !activeShift) return;
+    setAddingFuel(true);
+    try {
+      await api(pin, "addFuel", {shiftId:activeShift.id, km:Number(fuelKm)||0, amount:amt, liters:Number(fuelLiters)||0});
+      setFuelKm(""); setFuelAmount(""); setFuelLiters("");
+      await onReloadShifts();
+    }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setAddingFuel(false);
+  };
+  const endShift = async ({ kmEnd, notes }) => {
+    try { await api(pin, "endShift", {shiftId:activeShift.id, kmEnd, notes}); showToast("Vardiya tamamlandı"); await onReloadShifts(); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+  };
+  const saveNote = async () => {
+    setSavingNote(true);
+    try { await api(pin, "updateOwnNote", {note}); showToast("Not gönderildi"); }
+    catch(ex){ showToast("Hata: "+ex.message,"err"); }
+    setSavingNote(false);
+  };
+
+  const activePayout = activeShift ? computePayout(driver, activeShift.earnings) : 0;
+
+  return e("div", null,
+    e("div", {style:{fontSize:20,fontWeight:900,color:"#f5f5f0",marginBottom:4}}, "Merhaba, " + driver.firstName),
+    taxi && e("div", {style:{fontSize:13,color:"#8a8a80",marginBottom:16}}, "🚕 " + taxi.label + (taxi.plate?" · "+taxi.plate:"")),
+
+    !activeShift && e("button", {style:{...S.btn(), width:"100%", fontSize:16, padding:"14px 16px", marginBottom:16, opacity:startBusy?0.6:1}, disabled:startBusy, onClick:()=>setShowStart(true)}, startBusy?"...":"▶ Vardiya Başlat"),
+
+    activeShift && e("div", {style:{...S.card, borderColor:CONFIG.accentColor, borderWidth:2}},
+      e("div", {style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        e("div", {style:{fontSize:15,fontWeight:800,color:CONFIG.accentColor}}, "🟢 Vardiya Devam Ediyor"),
+        e("div", {style:{fontSize:12,color:"#9a9a90"}}, "Başlangıç: " + activeShift.timeStart)
+      ),
+      e("div", {style:{fontSize:28,fontWeight:900,color:"#f5f5f0",marginTop:10}}, fmtTL(activeShift.earnings)),
+      e("div", {style:{fontSize:12,color:"#9a9a90",marginBottom:4}}, (activeShift.rides||[]).length + " sefer"),
+      e("div", {style:{fontSize:13,color:CONFIG.accentColor,fontWeight:700,marginBottom:14}}, "Tahmini Payınız: " + fmtTL(activePayout)),
+
+      (activeShift.rides||[]).length > 0 && e("div", {style:{marginBottom:14, display:"flex", flexDirection:"column", gap:6, maxHeight:150, overflowY:"auto"}},
+        [...activeShift.rides].reverse().map((r,idx) => e("div", {key:idx, style:{display:"flex",justifyContent:"space-between",background:"#0f0f0f",border:"1px solid #262626",borderRadius:8,padding:"6px 10px"}},
+          e("span", {style:{fontSize:13,color:"#f5f5f0",fontWeight:700}}, fmtTL(r.amount)),
+          e("span", {style:{fontSize:12,color:"#8a8a80"}}, r.time)
+        ))
+      ),
+      e("div", {style:{display:"flex",gap:8,marginBottom:16}},
+        e("input",{style:{...S.input,flex:1}, type:"number", inputMode:"decimal", placeholder:"Sefer tutarı (₺)", value:rideInput,
+          onChange:ev=>setRideInput(ev.target.value), onKeyDown:ev=>{ if(ev.key==="Enter"){ev.preventDefault();addRide();} }}),
+        e("button", {style:{...S.btn(), padding:"10px 18px", opacity:addingRide?0.6:1}, disabled:addingRide, onClick:addRide}, "+ Sefer Ekle")
+      ),
+
+      e("div", {style:{borderTop:"1px solid #262626", paddingTop:12, marginBottom:12}},
+        e("div", {style:S.label}, "⛽ Yakıt Alımı"),
+        (activeShift.fuel||[]).length > 0 && e("div", {style:{margin:"8px 0", display:"flex", flexDirection:"column", gap:6, maxHeight:120, overflowY:"auto"}},
+          [...activeShift.fuel].reverse().map((f,idx) => e("div", {key:idx, style:{display:"flex",justifyContent:"space-between",background:"#0f0f0f",border:"1px solid #262626",borderRadius:8,padding:"6px 10px"}},
+            e("span", {style:{fontSize:12,color:"#f5f5f0",fontWeight:700}}, fmtTL(f.amount) + (f.liters?" ("+f.liters+" L)":"")),
+            e("span", {style:{fontSize:11,color:"#8a8a80"}}, fmtKm(f.km) + " · " + f.time)
+          ))
+        ),
+        e("div", {style:{display:"flex",gap:6,marginTop:8}},
+          e("input",{style:{...S.input,flex:1}, type:"number", inputMode:"decimal", placeholder:"Km", value:fuelKm, onChange:ev=>setFuelKm(ev.target.value)}),
+          e("input",{style:{...S.input,flex:1}, type:"number", inputMode:"decimal", placeholder:"Tutar (₺)", value:fuelAmount, onChange:ev=>setFuelAmount(ev.target.value)}),
+          e("input",{style:{...S.input,flex:1}, type:"number", inputMode:"decimal", placeholder:"Litre", value:fuelLiters, onChange:ev=>setFuelLiters(ev.target.value)})
+        ),
+        e("button", {style:{...S.btn("ghost"), width:"100%", marginTop:8, opacity:addingFuel?0.6:1}, disabled:addingFuel, onClick:addFuel}, "+ Yakıt Ekle")
+      ),
+
+      e("button", {style:{...S.btn("ghost"), width:"100%"}, onClick:()=>setShowEnd(true)}, "⏹ Vardiyayı Bitir")
+    ),
+
+    driver.adminNotes && e("div", {style:{...S.card, borderColor:CONFIG.accentColor+"55"}},
+      e("div", {style:S.label}, "Yöneticiden Not"),
+      e("div", {style:{fontSize:13,color:"#c8c8c0",marginTop:4}}, driver.adminNotes)
+    ),
+
+    e("div", {style:S.card},
+      e("div", {style:S.label}, "Yöneticiye Not Gönder"),
+      e("textarea", {style:{...S.input,minHeight:60,marginTop:4}, value:note, onChange:ev=>setNote(ev.target.value)}),
+      e("button", {style:{...S.btn("ghost"), marginTop:8, opacity:savingNote?0.6:1}, disabled:savingNote, onClick:saveNote}, savingNote?"Gönderiliyor...":"Notu Gönder")
+    ),
+
+    e("div", {style:{fontSize:14,fontWeight:800,color:"#f5f5f0",margin:"16px 0 8px"}}, "Vardiya Geçmişim"),
+    sorted.length===0 && e("div", {style:{color:"#8a8a80",fontSize:13}}, "Henüz tamamlanmış vardiya yok."),
+    sorted.map(sh => e(ShiftHistoryRow, {key:sh.id, sh, driver})),
+    showStart && e(StartShiftModal, {taxiLabel: taxi&&taxi.label, onClose:()=>setShowStart(false), onSave:startShift}),
+    showEnd && activeShift && e(EndShiftModal, {kmStart: activeShift.kmStart, onClose:()=>setShowEnd(false), onSave:endShift})
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// HEADER / NAV
+// ══════════════════════════════════════════════════════════════
+function Header({ onLogout, isAdmin }) {
+  return e("div", {style:S.header},
+    e("div", {style:{display:"flex",alignItems:"center",gap:10}},
+      e("div", {style:{width:32,height:32,borderRadius:8,background:CONFIG.accentColor,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}, CONFIG.logoText),
+      e("span", {style:{fontWeight:800,fontSize:17,color:"#f5f5f0",letterSpacing:"-0.3px"}}, CONFIG.companyName)
+    ),
+    e("div", {style:{display:"flex",alignItems:"center",gap:12}},
+      isAdmin && e("span",{style:{fontSize:10,color:CONFIG.accentColor,border:"1px solid "+CONFIG.accentColor,borderRadius:6,padding:"2px 8px",fontWeight:700}},"YÖNETİCİ"),
+      e("div", {style:{fontSize:12,color:"#8a8a80",cursor:"pointer"}, onClick:onLogout}, "Çıkış")
+    )
+  );
+}
+
+function Sidebar({ view, setView }) {
+  const items = [ ["home","🚕","Taksiler"], ["expenses","💳","Giderler"], ["vendors","🔧","Tedarikçiler"], ["settings","⚙️","Ayarlar"] ];
+  return e("div", {className:"desktop-sidebar", style:{...S.sidebar, display:"flex", flexDirection:"column", justifyContent:"space-between"}},
+    e("div", null,
+      e("div", {style:S.sideLabel}, "Yönetim"),
+      items.map(([id,icon,label]) => e("div", {key:id, style:S.sideItem(view===id), onClick:()=>setView(id)}, e("span",null,icon), label))
+    ),
+    e("div", {style:{fontSize:10, color:"#444", padding:"10px 16px"}}, "Powered by BuildFlow — Weblina LLC")
+  );
+}
+
+function BottomNav({ view, setView }) {
+  const items = [ ["home","🚕","Taksiler"], ["expenses","💳","Giderler"], ["vendors","🔧","Tedarikçi"], ["settings","⚙️","Ayarlar"] ];
+  return e("div", {className:"bottom-nav", style:{position:"fixed",bottom:0,left:0,right:0,background:"#141414",borderTop:"1px solid #2a2a2a",zIndex:100}},
+    items.map(([id,icon,label]) => e("div", {key:id, onClick:()=>setView(id),
+      style:{flex:1,textAlign:"center",padding:"10px 0",cursor:"pointer",color: view===id?CONFIG.accentColor:"#8a8a80"}},
+      e("div",{style:{fontSize:18}},icon), e("div",{style:{fontSize:10,marginTop:2,fontWeight:600}},label)
+    ))
+  );
+}
+
+function Toast({ toast }) {
+  if (!toast) return null;
+  return e("div", {style:{position:"fixed",top:64,left:"50%",transform:"translateX(-50%)",background: toast.type==="err"?"#ef4444":"#161616",border:"1px solid "+(toast.type==="err"?"#ef4444":CONFIG.accentColor),color:"#f5f5f0",padding:"10px 18px",borderRadius:8,fontSize:13,zIndex:2000,fontWeight:600}}, toast.msg);
+}
+
+// ══════════════════════════════════════════════════════════════
+// APP ROOT
+// ══════════════════════════════════════════════════════════════
+function App() {
+  const [pin, setPin] = useState(() => { try { return localStorage.getItem("taksigo_pin") || null; } catch(e) { return null; } });
+  const [role, setRole] = useState(null); // "admin" | "driver"
+  const [adminEmail, setAdminEmail] = useState("");
+  const [me, setMe] = useState(null);     // driver record if role=driver
+  const [taxis, setTaxis] = useState([]);
+  const [drivers, setDrivers] = useState([]);
+  const [shifts, setShifts] = useState([]);
+  const [view, setView] = useState("home");
+  const [activeDriverId, setActiveDriverId] = useState(null);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const [authFailed, setAuthFailed] = useState(false);
+  const [toast, showToast] = useToast();
+
+  const loadAll = async (p) => {
+    try {
+      const who = await api(p, "whoAmI");
+      setRole(who.role);
+      setMe(who.role === "driver" ? who.driver : null);
+      setAdminEmail(who.role === "admin" ? (who.email||"") : "");
+
+      const [tRes, dRes, sRes] = await Promise.all([
+        api(p,"getTaxis"), api(p,"getDrivers"), api(p,"getShifts",{})
+      ]);
+      setTaxis(tRes.taxis||[]);
+      setDrivers(dRes.drivers||[]);
+      setShifts(sRes.shifts||[]);
+      setLoadedOnce(true);
+    } catch (ex) {
+      // Stored PIN is no longer valid (e.g. reset) — drop back to login
+      try { localStorage.removeItem("taksigo_pin"); } catch(e) {}
+      setPin(null); setAuthFailed(true);
+    }
+  };
+
+  // Lightweight refresh used after ride/fuel/shift actions — only re-fetches
+  // shifts instead of the full taxis+drivers+shifts+whoAmI bundle, since those
+  // rarely change turn-to-turn. Meaningfully faster on every "sefer ekle" tap.
+  const reloadShifts = async () => {
+    try {
+      const sRes = await api(pin, "getShifts", {});
+      setShifts(sRes.shifts||[]);
+    } catch (ex) { showToast("Hata: "+ex.message, "err"); }
+  };
+
+  useEffect(() => { if (pin) loadAll(pin); }, [pin]);
+
+  const handleLogin = (p) => { try { localStorage.setItem("taksigo_pin", p); } catch(e) {} setAuthFailed(false); setPin(p); };
+  const handlePinChanged = (newPin) => { try { localStorage.setItem("taksigo_pin", newPin); } catch(e) {} setPin(newPin); };
+  const handleLogout = () => { try { localStorage.removeItem("taksigo_pin"); } catch(e) {} setPin(null); setRole(null); setMe(null); setView("home"); setActiveDriverId(null); setLoadedOnce(false); };
+  const reload = () => loadAll(pin);
+
+  if (!pin) return e(LoginView, { onLogin: handleLogin });
+  if (!loadedOnce) return e("div", {style:{...S.root, alignItems:"center", justifyContent:"center", color:"#8a8a80"}}, "Yükleniyor...");
+
+  // ── DRIVER MODE ──
+  if (role === "driver") {
+    const myShifts = shifts.filter(sh => sh.driverId === (me && me.id));
+    const myTaxi = taxis.find(t => t.id === (me && me.taxiId));
+    return e("div", {style:S.root},
+      e(Header, {onLogout:handleLogout, isAdmin:false}),
+      e("div", {className:"content-area", style:S.content},
+        me ? e(DriverDashboard, {pin, driver:me, taxi:myTaxi, shifts:myShifts, onReload:reload, onReloadShifts:reloadShifts, showToast})
+           : e("div", {style:{color:"#8a8a80"}}, "Sürücü kaydınız bulunamadı.")
+      ),
+      e(Toast, {toast})
+    );
+  }
+
+  // ── ADMIN MODE ──
+  const activeDriver = drivers.find(d => d.id === activeDriverId);
+  const activeTaxi = activeDriver ? taxis.find(t => t.id === activeDriver.taxiId) : null;
+
+  return e("div", {style:S.root},
+    e(Header, {onLogout:handleLogout, isAdmin:true}),
+    e("div", {style:{display:"flex", flex:1, overflow:"hidden"}},
+      e(Sidebar, {view, setView:(v)=>{setView(v); setActiveDriverId(null);}}),
+      e("div", {className:"content-area", style:S.content},
+        activeDriverId
+          ? e(DriverDetailView, {pin, driver:activeDriver, taxi:activeTaxi, shifts: shifts.filter(sh=>sh.driverId===activeDriverId), onBack:()=>setActiveDriverId(null), onReload:reload, onReloadShifts:reloadShifts, showToast})
+          : view === "home" ? e(AdminHomeView, {pin, taxis, drivers, shifts, onReload:reload, showToast, openDriver:setActiveDriverId})
+          : view === "expenses" ? e(ExpensesView, {pin, taxis, showToast})
+          : view === "vendors" ? e(VendorsView, {pin, showToast})
+          : view === "settings" ? e(SettingsView, {pin, adminEmail, onPinChanged:handlePinChanged, onEmailChanged:setAdminEmail, showToast})
+          : null
+      )
+    ),
+    e(BottomNav, {view, setView:(v)=>{setView(v); setActiveDriverId(null);}}),
+    e(Toast, {toast})
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(e(App));
