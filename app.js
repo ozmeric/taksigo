@@ -1014,6 +1014,21 @@ function DriverDashboard({ pin, driver, taxi, shifts, onReload, onReloadShifts, 
 // ══════════════════════════════════════════════════════════════
 // HEADER / NAV
 // ══════════════════════════════════════════════════════════════
+// Live clock, always Istanbul time regardless of the viewing device's own
+// clock/timezone — same principle as every other timestamp in the app.
+function IstanbulClock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const timeStr = now.toLocaleTimeString("tr-TR", {timeZone:"Europe/Istanbul", hour:"2-digit", minute:"2-digit", second:"2-digit"});
+  const dateStr = now.toLocaleDateString("tr-TR", {timeZone:"Europe/Istanbul", day:"2-digit", month:"short", year:"numeric"});
+  return e("div", {style:{fontSize:12,color:"#9a9a90",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}},
+    e("span",null,"🕐"), e("span",{className:"clock-date"}, dateStr + " · "), e("span",null, timeStr)
+  );
+}
+
 function Header({ onLogout, isAdmin }) {
   return e("div", {style:S.header},
     e("div", {style:{display:"flex",alignItems:"center",gap:10}},
@@ -1021,6 +1036,7 @@ function Header({ onLogout, isAdmin }) {
       e("span", {style:{fontWeight:800,fontSize:17,color:"#f5f5f0",letterSpacing:"-0.3px"}}, CONFIG.companyName)
     ),
     e("div", {style:{display:"flex",alignItems:"center",gap:12}},
+      isAdmin && e(IstanbulClock, null),
       isAdmin && e("span",{style:{fontSize:10,color:CONFIG.accentColor,border:"1px solid "+CONFIG.accentColor,borderRadius:6,padding:"2px 8px",fontWeight:700}},"YÖNETİCİ"),
       e("div", {style:{fontSize:12,color:"#8a8a80",cursor:"pointer"}, onClick:onLogout}, "Çıkış")
     )
